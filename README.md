@@ -2,7 +2,7 @@
 
 Generates CNC engraving sheets for colour rings. Each code gets its own plate, a strip that is later cut out and rolled into a ring, with the code engraved 3 or 4 times. Straight lines separate the plates. Some plates are left empty so the sheet can be stapled down, and there are more staple holes in the margin around the sheet.
 
-The output is one SVG and one DXF file per sheet. Each file has four layers, so CAM software (VCarve, FreeCAD, …) can give each one its own toolpath:
+The output is one SVG and one DXF file per sheet, plus ready-to-run [G-code](#g-code). The SVG and DXF have four layers, so CAM software (VCarve, FreeCAD, …) can give each one its own toolpath:
 
 | Layer     | Contents                                                     | Typical toolpath             |
 |-----------|--------------------------------------------------------------|------------------------------|
@@ -15,9 +15,11 @@ Units are mm. The origin is the bottom-left corner of the sheet, with X to the r
 
 ## Setup (Python 3.10+)
 
+To run it from the code, see [Development](#development). To run it on a Raspberry Pi or another computer that should update by itself, see [Running it on a Raspberry Pi or any other computer](#running-it-on-a-raspberry-pi-or-any-other-computer). The short version:
+
 ```sh
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ## Web interface
@@ -31,7 +33,7 @@ python3 -m venv .venv
 - Pick a preset, adjust settings, and use **Save preset…** to store the result in `presets.json`, e.g. one preset per species or ring size. **Export** downloads all presets as a file, and **Import…** adds the presets from such a file, for example to copy them to another machine.
 - Click a plate in the preview to skip it for staples, or fill in rows × columns under *Skipped plates*.
 - Scroll to zoom, drag to pan, double-click to fit.
-- Download the SVG or DXF of the sheet on screen, or a zip of all sheets. The zip also contains `*_plates.csv`, which lists the sheet, row and column of each code, and `*_settings.json`.
+- Download the SVG, DXF or G-code of the sheet on screen, or a zip of all sheets. The zip also contains `*_plates.csv`, which lists the sheet, row and column of each code, and `*_settings.json`.
 
 ## Command line
 
@@ -79,24 +81,79 @@ docker compose down              # stop (presets are kept)
 
 ## Development
 
-Work in the venv as described above. Saved presets go to `presets.json`, which git ignores. `presets.default.json` is used until you save the first preset, so to ship your presets as the defaults for new machines, copy `presets.json` over `presets.default.json`. Set `CNC_RINGS_DATA=/some/folder` to keep presets somewhere else.
+Day-to-day work happens on the `dev` branch, running the app straight from the code. Nothing reaches the machines until `dev` is merged into `main`.
 
-Before pushing, run the tests:
+### Running from the code
+
+You need Python 3.10 or newer and git. The commands are for Linux, macOS and a Raspberry Pi. On Windows, use `.venv\Scripts\python` wherever it says `.venv/bin/python`, and `.venv\Scripts\pytest` for `.venv/bin/pytest`.
 
 ```sh
-.venv/bin/pip install -r requirements-dev.txt
+git clone https://github.com/smolvarsmyr/cnc-rings.git
+cd cnc-rings
+git switch dev
+
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt   # the app's packages plus pytest
+
+.venv/bin/python webapp.py --debug --open
+```
+
+This opens the web interface at http://127.0.0.1:5000.
+
+- **Restarts:** with `--debug`, the server restarts by itself when you save a Python file, and errors are shown in the browser. Changes to `web/` (HTML, CSS, JS) only need a page reload.
+- **Other devices:** add `--host 0.0.0.0` to open the app from another device on the network, at `http://<this-computer>:5000`. Leave out `--debug` when you do that, because the debug page lets anyone who can reach it run code.
+- **Command line:** `.venv/bin/python generate_sheets.py ...` works the same way (see [Command line](#command-line)), and writes to `output/`.
+- **Requirements:** if `requirements.txt` changes after a pull, run the `pip install` line again.
+
+**Presets while developing:**
+- **Where they go:** saved presets go to `presets.json` in the repo folder, which git ignores. Until you save the first preset, the app shows `presets.default.json`.
+- **Changing the defaults:** to make your presets the defaults for new installations, copy `presets.json` over `presets.default.json` and commit it.
+- **Another folder:** set `CNC_RINGS_DATA=/some/folder` to keep presets somewhere else.
+
+### Tests
+
+```sh
 .venv/bin/pytest
 ```
 
-Pull requests only run the tests. Pushes to `main` are released. If the tests fail, nothing is published and the machines keep running the previous version.
+The tests generate sheets from every default preset and check the SVG, DXF and web API. They also run every G-code file through a simulator that checks the safety rules: no sideways rapid moves below the safe height, no rapid moves into uncut material, and never going down faster than the plunge rate. Run them before merging. They are also what stops a broken version from being released.
+
+### From `dev` to the machines
+
+1. Commit to `dev` and push it with `git push -u origin dev` (later pushes just `git push`). Nothing is built or deployed.
+2. When it is ready, open a pull request from `dev` to `main` on GitHub. The tests run on the pull request.
+3. Merge it. The push to `main` builds and publishes a new image, and every machine picks it up within `UPDATE_INTERVAL` (15 minutes by default).
 
 ## The photo preset
 
 `PL series 40x115 (photo)` is a copy of the sheet in the reference photo: 600 × 600 mm sheet, 14 × 5 plates of 40 × 115 mm, 4 copies per plate, plates 2:5, 2:10, 4:5 and 4:10 skipped, and 4 pairs of staple holes on each edge. I estimated the sizes from a photo taken at an angle, so check them against a real sheet before cutting and save the corrected values with **Save preset…**.
 
+## G-code
+
+The app can also write G-code directly, so you don't need the CAM step. There is one file per tool and sheet, numbered in the order to run them:
+
+```
+PL37-PM02_sheet01_1_staples_T1.ngc   staple holes, 3 mm end mill
+PL37-PM02_sheet01_2_text_T2.ngc      codes
+PL37-PM02_sheet01_3_grid_T3.ngc      grid lines, V-bit
+```
+
+The settings are in the folded *G-code* groups at the bottom of the form, and they are saved with presets. The defaults copy the MillMage setup the sheets were cut with before: origin top-left, safe height 5 mm, 22.5° ramps, and the same tools, feeds and depths.
+
+- **G-code:** settings for the whole machine. These are the safe height for all moves between cuts, the height the tool rapids down to before it slows to the plunge rate, where X0 Y0 is (top-left, bottom-left or centre of the sheet; Z0 is always the top of the material), the ramp angle, the milling direction, the spindle spin-up wait, an optional park position, and the file extension.
+- **One group per operation** (staple holes, text, grid lines) with *Export*, a tool number and description, spindle speed, feed and plunge rate, depth and depth per pass. Operations with the same tool number go into the same file. Untick *Export* to leave an operation out. A spindle speed of 0 leaves out the spindle commands, for a router you switch on by hand.
+
+How each operation is cut:
+
+- **Text and grid lines** are followed on the line. Each line ramps in along its first segment, and with several passes it goes back and forth without lifting.
+- **Staple holes** as wide as the tool are drilled with pecks. Slots as wide as the tool are cut along their length. Wider holes are milled out from the middle to the edge, with a helix into round holes and a ramp into slots. The *Tool diameter* setting decides which method is used. A warning appears if the tool is wider than a hole.
+- The tool never goes down faster than the plunge rate, also on ramps and helixes. All moves between cuts are at the safe height.
+
+The files use only common G-code (G0/G1/G2/G3, M3/M5, G4, M30, comments in parentheses), which runs on GRBL, LinuxCNC, Mach3/4 and UCCNC. The header gives the estimated cutting time. **Check new settings in a simulator such as [NC Viewer](https://ncviewer.com) or with an air cut before cutting a sheet.**
+
 ## DWG
 
-DXF is the format VCarve and FreeCAD import most reliably. DWG export works only when the [ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter) is installed. Once it is, a DWG button appears in the web interface and `--formats svg,dxf,dwg` works on the command line.
+DXF is the format VCarve and FreeCAD import most reliably. DWG export works only when the [ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter) is installed. Once it is, a DWG button appears in the web interface and `--formats svg,dxf,gcode,dwg` works on the command line.
 
 ## Fonts
 
@@ -122,7 +179,7 @@ To make your own font, either:
 
 ## Files
 
-- `generate_sheets.py`: layout, SVG/DXF output, CLI. The settings list (`FIELDS`) also builds the web form.
+- `generate_sheets.py`: layout, SVG/DXF/G-code output, CLI. The settings list (`FIELDS`) also builds the web form.
 - `stroke_font.py`: loads single-line fonts and lays out text.
 - `webapp.py` and `web/`: the web interface (Flask).
 - `presets.default.json`: the presets a new installation starts with. Saved presets go to `presets.json`.

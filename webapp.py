@@ -20,7 +20,8 @@ import generate_sheets as gs
 WEB_DIR = Path(__file__).resolve().parent / "web"
 # Set by the Docker build to the git commit; shown in the page header.
 VERSION = os.environ.get("CNC_RINGS_VERSION") or "dev"
-MIME = {"svg": "image/svg+xml", "dxf": "application/dxf", "dwg": "application/acad", "zip": "application/zip"}
+MIME = {"svg": "image/svg+xml", "dxf": "application/dxf", "dwg": "application/acad", "zip": "application/zip",
+        "gcode": "text/plain"}
 
 app = Flask(__name__, static_folder=str(WEB_DIR), static_url_path="/static")
 
@@ -125,13 +126,19 @@ def download():
     name = gs.safe_name(raw_name) if raw_name else gs.default_name(job.codes)
     fmt = data.get("format", "zip")
     if fmt == "zip":
-        formats = {"svg", "dxf"} | ({"dwg"} if data.get("dwg") and gs.dwg_available() else set())
+        formats = {"svg", "dxf", "gcode"} | ({"dwg"} if data.get("dwg") and gs.dwg_available() else set())
         payload, filename = gs.zip_files(gs.job_files(job, name, formats)), f"{name}.zip"
-    elif fmt in ("svg", "dxf", "dwg"):
+    elif fmt in ("svg", "dxf", "dwg", "gcode"):
         number = int(data.get("sheet") or 1)
         if not 1 <= number <= len(job.sheets):
             raise ValueError(f"There is no sheet {number}")
-        filename, payload = next(iter(gs.sheet_files(job, job.sheets[number - 1], name, {fmt}).items()))
+        files = gs.sheet_files(job, job.sheets[number - 1], name, {fmt})
+        if not files:
+            raise ValueError("There is no G-code to export: tick Export for at least one of the G-code operations")
+        if len(files) == 1:
+            filename, payload = next(iter(files.items()))
+        else:  # one G-code file per tool
+            payload, filename, fmt = gs.zip_files(files), f"{name}_sheet{number:02d}_gcode.zip", "zip"
     else:
         raise ValueError(f"Unknown format '{fmt}'")
     return Response(payload, mimetype=MIME[fmt], headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -142,10 +149,11 @@ def main() -> None:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=5000)
     ap.add_argument("--open", action="store_true", help="open the page in a browser")
+    ap.add_argument("--debug", action="store_true", help="restart when the code changes, show errors in the browser")
     args = ap.parse_args()
-    if args.open:
+    if args.open and not os.environ.get("WERKZEUG_RUN_MAIN"):  # not again when --debug restarts the server
         webbrowser.open(f"http://{'127.0.0.1' if args.host == '0.0.0.0' else args.host}:{args.port}")
-    app.run(host=args.host, port=args.port)
+    app.run(host=args.host, port=args.port, debug=args.debug)
 
 
 if __name__ == "__main__":

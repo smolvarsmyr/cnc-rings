@@ -3,3 +3,4 @@ __pycache__/
 output/
 *.tmp
 presets.json
+gcodeexamples/

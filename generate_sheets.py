@@ -78,6 +78,31 @@ class Field:
     minimum: float | None = None
 
 
+def _gcode_fields(op: str, group: str, tool: int, name: str, rpm: int, feed: float, plunge: float, depth: float,
+                  step: float, diameter: float | None = None) -> list[Field]:
+    """Settings for one G-code operation, all named gcode_<op>_..."""
+    p = f"gcode_{op}_"
+    fields = [
+        Field(p + "enabled", True, "bool", group, "Export", "Write G-code for this operation."),
+        Field(p + "tool", tool, "int", group, "Tool number",
+              "Operations with the same tool number share a file, so tools are only changed between files.",
+              minimum=0),
+        Field(p + "tool_name", name, "text", group, "Tool", "Written into the file as a reminder of what to fit."),
+    ]
+    if diameter is not None:
+        fields.append(Field(p + "tool_diameter", diameter, "mm", group, "Tool diameter",
+                            "Holes wider than the tool are milled out from the middle; otherwise the tool plunges "
+                            "straight in.", minimum=0.1))
+    return fields + [
+        Field(p + "rpm", rpm, "int", group, "Spindle speed (rpm)",
+              "0 = no spindle commands, e.g. for a router switched on by hand.", minimum=0),
+        Field(p + "feed", feed, "number", group, "Feed rate (mm/min)", minimum=1),
+        Field(p + "plunge", plunge, "number", group, "Plunge rate (mm/min)", minimum=1),
+        Field(p + "depth", depth, "mm", group, "Cut depth", "Below the top of the material.", minimum=0.01),
+        Field(p + "step", step, "mm", group, "Depth per pass", "0 = the full depth in one pass.", minimum=0),
+    ]
+
+
 FIELDS = (
     Field("sheet_width", 600.0, "mm", "Sheet", "Sheet width", minimum=1),
     Field("sheet_height", 600.0, "mm", "Sheet", "Sheet height", minimum=1),
@@ -139,6 +164,30 @@ FIELDS = (
 
     Field("dxf_version", "R2000", "choice", "Output", "DXF version",
           "R2000 works in VCarve and FreeCAD; R12 for very old software.", ("R12", "R2000", "R2010", "R2018")),
+
+    Field("gcode_safe_z", 5.0, "mm", "G-code", "Safe height",
+          "For all moves between cuts. Z0 is the top of the material.", minimum=0.5),
+    Field("gcode_plunge_z", 1.0, "mm", "G-code", "Rapid down to",
+          "Height above the material where the tool slows down to the plunge rate.", minimum=0),
+    Field("gcode_origin", "top-left", "choice", "G-code", "X0 Y0 is at",
+          "The point of the sheet the machine is zeroed on.", ("bottom-left", "top-left", "center")),
+    Field("gcode_ramp_angle", 22.5, "number", "G-code", "Ramp angle (°)",
+          "Lines and slots are entered by ramping down along the first bit of the path and back. "
+          "0 = plunge straight down.", minimum=0),
+    Field("gcode_direction", "climb", "choice", "G-code", "Milling direction",
+          "For staple holes wider than the tool, with the spindle turning clockwise (M3).",
+          ("climb", "conventional")),
+    Field("gcode_spinup", 3.0, "number", "G-code", "Spindle spin-up wait (s)", minimum=0),
+    Field("gcode_park_x", None, "auto_mm", "G-code", "Park at X",
+          "Where the tool goes when a file ends, in G-code coordinates. Empty = stay above the last cut."),
+    Field("gcode_park_y", None, "auto_mm", "G-code", "Park at Y"),
+    Field("gcode_extension", "ngc", "choice", "G-code", "File extension", choices=("ngc", "nc", "gcode", "tap", "cnc")),
+
+    *_gcode_fields("staples", "G-code: staple holes", 1, "3 mm 2 flute end mill", 18000, feed=1500.0, plunge=400.0,
+                   depth=2.5, step=1.0, diameter=3.0),
+    *_gcode_fields("text", "G-code: text", 2, "engraving bit", 1000, feed=600.0, plunge=120.0, depth=0.2, step=0.0),
+    *_gcode_fields("grid", "G-code: grid lines", 3, "45° 2 flute V-bit", 18000, feed=1143.0, plunge=400.0,
+                   depth=0.7, step=0.0),
 )
 FIELD_BY_KEY = {f.key: f for f in FIELDS}
 
@@ -568,6 +617,14 @@ def build_job(codes: list[str], s: SimpleNamespace, font: StrokeFont | None = No
             warnings.append("Staple holes in skipped plates extend past the plate edges.")
             break
 
+    if s.gcode_staples_enabled and edge + cell:
+        smallest = 2 * min(hole.radius for hole in edge + cell)
+        if s.gcode_staples_tool_diameter > smallest + EPS:
+            warnings.append(f"G-code: the staple tool ({s.gcode_staples_tool_diameter:g} mm) is wider than the "
+                            f"smallest staple hole ({smallest:g} mm), so those holes come out too big.")
+    if any(getattr(s, f"gcode_{op}_enabled") for op, _, _ in GCODE_OPS) and s.gcode_plunge_z > s.gcode_safe_z:
+        warnings.append("G-code: 'Rapid down to' is above the safe height, so the safe height is used for both.")
+
     static: dict[str, list[Shape]] = {
         "SHEET": [Polylines([[(0, 0), (s.sheet_width, 0), (s.sheet_width, s.sheet_height), (0, s.sheet_height)]],
                             closed=True)] if s.sheet_outline else [],
@@ -731,9 +788,9 @@ def default_name(codes: list[str]) -> str:
 
 def sheet_files(job: Job, sheet: Sheet, name: str, formats: set[str]) -> dict[str, bytes]:
     stem = f"{name}_sheet{sheet.number:02d}"
+    title = f"{name} - sheet {sheet.number} of {len(job.sheets)}"
     files = {}
     if "svg" in formats:
-        title = f"{name} - sheet {sheet.number} of {len(job.sheets)}"
         files[f"{stem}.svg"] = sheet_svg(sheet, job.settings, title).encode("utf-8")
     if formats & {"dxf", "dwg"}:
         doc = sheet_dxf(sheet, job.settings)
@@ -741,6 +798,8 @@ def sheet_files(job: Job, sheet: Sheet, name: str, formats: set[str]) -> dict[st
             files[f"{stem}.dxf"] = dxf_bytes(doc)
         if "dwg" in formats:
             files[f"{stem}.dwg"] = dwg_bytes(doc)
+    if "gcode" in formats:
+        files.update(sheet_gcode(job, sheet, stem, title))
     return files
 
 
@@ -768,6 +827,324 @@ def zip_files(files: dict[str, bytes]) -> bytes:
         for name, data in files.items():
             zf.writestr(name, data)
     return buffer.getvalue()
+
+
+# --------------------------------------------------------------------------
+# G-code
+# --------------------------------------------------------------------------
+
+# (operation, layer, description), in the order the files are meant to be run: the staple holes first, so the
+# sheet can be stapled down before the text and the grid are engraved.
+GCODE_OPS = (("staples", "STAPLES", "staple holes"), ("text", "TEXT", "text"), ("grid", "GRID", "grid lines"))
+STEPOVER = 0.4  # of the tool diameter, between the rings that mill out a staple hole wider than the tool
+PECK_CLEARANCE = 0.2  # mm above the bottom of a hole to rapid back down to between pecks
+ORIGIN_NAMES = {"bottom-left": "bottom-left corner", "top-left": "top-left corner", "center": "centre"}
+
+
+def _op_settings(s: SimpleNamespace, op: str) -> SimpleNamespace:
+    prefix = f"gcode_{op}_"
+    return SimpleNamespace(**{k[len(prefix):]: v for k, v in vars(s).items() if k.startswith(prefix)})
+
+
+def _pass_depths(depth: float, step: float) -> list[float]:
+    """Equally spaced pass depths down to the full depth."""
+    n = max(1, math.ceil(depth / step - EPS)) if step > 0 else 1
+    return [depth * k / n for k in range(1, n + 1)]
+
+
+# Comments are kept to plain ASCII, which every controller accepts.
+_COMMENT_CHARS = str.maketrans({"(": "[", ")": "]", "°": " deg", "æ": "ae", "ø": "o", "å": "a", "Æ": "AE", "Ø": "O",
+                                "Å": "A", "×": "x"})
+
+
+def _gcode_comment(text: str) -> str:
+    return "(" + text.translate(_COMMENT_CHARS).encode("ascii", "replace").decode() + ")"
+
+
+class _Program:
+    """The moves of one G-code file.
+
+    Takes sheet coordinates, with Z0 at the top of the material and negative Z into it, and writes them
+    relative to the chosen origin. Travel between cuts only ever happens at the safe height."""
+
+    def __init__(self, s: SimpleNamespace):
+        self.s = s
+        self.origin = {"bottom-left": (0.0, 0.0), "top-left": (0.0, s.sheet_height),
+                       "center": (s.sheet_width / 2, s.sheet_height / 2)}[s.gcode_origin]
+        self.safe_z = s.gcode_safe_z
+        self.plunge_z = min(s.gcode_plunge_z, s.gcode_safe_z)
+        self.lines: list[str] = []
+        self.x: float | None = None  # unknown until the first move
+        self.y: float | None = None
+        self.z: float | None = None
+        self.feed: float | None = None
+        self.rpm = 0
+        self.minutes = 0.0
+
+    @property
+    def xy(self) -> Point:
+        """Where the tool is, or the origin before the first move (where the machine was most likely zeroed)."""
+        return self.origin if self.x is None else (self.x, self.y)
+
+    def comment(self, text: str) -> None:
+        self.lines.append(_gcode_comment(text))
+
+    def _emit(self, code: str, words: list[str], feed: float | None) -> None:
+        if feed is not None and feed != self.feed:
+            words.append(f"F{round(feed)}")
+            self.feed = feed
+        self.lines.append(" ".join([code, *words]))
+
+    def _go(self, code: str, x: float | None, y: float | None, z: float | None, feed: float | None) -> float:
+        """A straight move, leaving out the axes that do not change. Returns its length."""
+        old = (self.x, self.y, self.z)
+        new = tuple(o if v is None else v for v, o in zip((x, y, z), old))
+        offsets = (*self.origin, 0.0)
+        words = [f"{axis}{_num(v - off)}" for axis, v, o, off in zip("XYZ", new, old, offsets)
+                 if v is not None and (o is None or abs(v - o) > EPS)]
+        if not words:
+            return 0.0
+        self._emit(code, words, feed)
+        length = math.dist(old, new) if None not in old else 0.0
+        self.x, self.y, self.z = new
+        return length
+
+    def rapid(self, x: float | None = None, y: float | None = None, z: float | None = None) -> None:
+        self._go("G0", x, y, z, None)
+
+    def cut(self, x: float | None = None, y: float | None = None, z: float | None = None, *, feed: float) -> None:
+        self.minutes += self._go("G1", x, y, z, feed) / feed
+
+    def arc(self, ccw: bool, x: float, y: float, centre: Point, *, feed: float, z: float | None = None) -> None:
+        """G3 (counter-clockwise) or G2 to (x, y) around centre; a full circle when (x, y) is where it starts."""
+        cx, cy = centre
+        a0 = math.atan2(self.y - cy, self.x - cx)
+        a1 = math.atan2(y - cy, x - cx)
+        sweep = ((a1 - a0) if ccw else (a0 - a1)) % math.tau
+        if sweep < 1e-9:
+            sweep = math.tau
+        dz = 0.0 if z is None else z - self.z
+        self.minutes += math.hypot(math.hypot(self.x - cx, self.y - cy) * sweep, dz) / feed
+        words = [f"X{_num(x - self.origin[0])}", f"Y{_num(y - self.origin[1])}"]
+        if z is not None:
+            words.append(f"Z{_num(z)}")
+        words += [f"I{_num(cx - self.x)}", f"J{_num(cy - self.y)}"]
+        self._emit("G3" if ccw else "G2", words, feed)
+        self.x, self.y, self.z = x, y, (self.z if z is None else z)
+
+    def lift(self) -> None:
+        self.rapid(z=self.safe_z)
+
+    def travel(self, x: float, y: float) -> None:
+        """Lift to the safe height, move above (x, y) and drop to where plunging starts."""
+        self.lift()
+        self.rapid(x, y)
+        self.rapid(z=self.plunge_z)
+
+    def spindle(self, rpm: int) -> None:
+        if rpm == self.rpm:
+            return
+        self.lift()
+        if rpm:
+            self.lines.append(f"M3 S{rpm}")
+            if self.s.gcode_spinup > 0:
+                self.lines.append(f"G4 P{_num(self.s.gcode_spinup)}")
+                self.minutes += self.s.gcode_spinup / 60
+        else:
+            self.lines.append("M5")
+        self.rpm = rpm
+
+
+def _nearest_first(shapes: list[Shape], g: _Program):
+    """Shapes in a short travel order: always the one whose bounding box is closest to the tool next."""
+    boxes = [shape_bbox(shape) for shape in shapes]
+    left = list(range(len(shapes)))
+    while left:
+        x, y = g.xy
+
+        def distance(i: int) -> float:
+            x0, y0, x1, y1 = boxes[i]
+            dx, dy = max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1)
+            return dx * dx + dy * dy
+
+        i = min(left, key=distance)
+        left.remove(i)
+        yield shapes[i]
+
+
+def _strokes_nearest_first(shape: Polylines, g: _Program):
+    """The strokes of a shape, each started from whichever end is closer to the tool."""
+    strokes = [line + line[:1] if shape.closed else list(line) for line in shape.lines]
+    while strokes:
+        here = g.xy
+        i = min(range(len(strokes)), key=lambda i: min(math.dist(here, strokes[i][0]), math.dist(here, strokes[i][-1])))
+        stroke = strokes.pop(i)
+        yield stroke if math.dist(here, stroke[0]) <= math.dist(here, stroke[-1]) else stroke[::-1]
+
+
+def _enter(g: _Program, path: list[Point], z: float, o: SimpleNamespace) -> None:
+    """Go down to z at the start of path, ramping out along its first segment and back at the ramp angle.
+
+    Plunges straight down through the air to the top of the material, and wherever there is no segment to ramp
+    along. When the segment is too short for the ramp angle, the ramp is steeper. Ramps never go down faster
+    than the plunge rate."""
+    if g.z > 0:
+        g.cut(z=0.0, feed=o.plunge)
+    angle = g.s.gcode_ramp_angle
+    if angle <= 0 or len(path) < 2 or z >= g.z or math.dist(path[0], path[1]) < EPS:
+        g.cut(z=z, feed=o.plunge)
+        return
+    (x0, y0), (x1, y1) = path[0], path[1]
+    half = (g.z - z) / 2
+    run = min(half / math.tan(math.radians(min(angle, 89.0))), math.dist(path[0], path[1]))
+    feed = _ramp_feed(o, math.hypot(run, half), half)
+    t = run / math.dist(path[0], path[1])
+    g.cut(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, g.z - half, feed=feed)
+    g.cut(x0, y0, z, feed=feed)
+
+
+def _ramp_feed(o: SimpleNamespace, length: float, drop: float) -> float:
+    """Feed rate for a move of this length that goes down by drop, so the tool goes down at most at the plunge
+    rate. Rounded down, as feed rates are written as whole numbers."""
+    return min(o.feed, math.floor(o.plunge * length / drop))
+
+
+def _engrave(g: _Program, points: list[Point], depths: list[float], o: SimpleNamespace) -> None:
+    """Cut along a line. Open lines go back and forth, one pass per depth, without lifting in between."""
+    closed = len(points) > 2 and math.dist(points[0], points[-1]) < EPS
+    g.travel(*points[0])
+    for k, depth in enumerate(depths):
+        path = points if closed or k % 2 == 0 else points[::-1]
+        _enter(g, path, -depth, o)
+        for x, y in path[1:]:
+            g.cut(x, y, feed=o.feed)
+    g.lift()
+
+
+def _drill(g: _Program, point: Point, depths: list[float], o: SimpleNamespace) -> None:
+    g.travel(*point)
+    for k, depth in enumerate(depths):
+        if k:  # peck: lift out to clear the chips, then rapid back down to just above the bottom
+            g.rapid(z=g.plunge_z)
+            g.rapid(z=min(-depths[k - 1] + PECK_CLEARANCE, g.plunge_z))
+        g.cut(z=-depth, feed=o.plunge)
+    g.lift()
+
+
+def _mill_hole(g: _Program, shape: Circle | Slot, depths: list[float], o: SimpleNamespace, ccw: bool) -> None:
+    """A staple hole. When the tool is as wide as the hole it plunges (or cuts along the slot); otherwise each pass
+    mills rings from the middle out, the last one finishing the edge. Round holes are entered with one turn of a
+    helix per pass, slots with a ramp."""
+    slot = isinstance(shape, Slot)
+    a, b = (shape.a, shape.b) if slot else (shape.center, shape.center)
+    tool_r = o.tool_diameter / 2
+    edge = shape.radius - tool_r
+    if edge < 0.01:
+        if slot:
+            _engrave(g, [a, b], depths, o)
+        else:
+            _drill(g, a, depths, o)
+        return
+
+    rings = [edge]
+    while rings[-1] > tool_r:  # the middle is not cut yet
+        rings.append(max(rings[-1] - STEPOVER * o.tool_diameter, 0.0))
+    rings.reverse()
+
+    def start(r: float) -> Point:
+        if not slot:
+            return (a[0] + r, a[1])
+        return slot_outline(Slot(a, b, r))[0] if r > 0 else a
+
+    def ring(r: float) -> None:
+        if not slot:
+            if r > 0:
+                g.arc(ccw, *start(r), a, feed=o.feed)
+        elif r <= 0:
+            g.cut(*b, feed=o.feed)
+            g.cut(*a, feed=o.feed)
+        else:
+            v0, v1, v2, v3 = slot_outline(Slot(a, b, r))  # counter-clockwise from v0
+            if ccw:
+                g.cut(*v1, feed=o.feed)
+                g.arc(True, *v2, b, feed=o.feed)
+                g.cut(*v3, feed=o.feed)
+                g.arc(True, *v0, a, feed=o.feed)
+            else:
+                g.arc(False, *v3, a, feed=o.feed)
+                g.cut(*v2, feed=o.feed)
+                g.arc(False, *v1, b, feed=o.feed)
+                g.cut(*v0, feed=o.feed)
+
+    for k, depth in enumerate(depths):
+        for i, r in enumerate(rings):
+            if i == 0 and k == 0:
+                g.travel(*start(r))
+            else:  # out to the next ring, or back to the first one through what is already cut
+                g.cut(*start(r), feed=o.feed)
+            if i == 0:
+                if slot:  # ramp along the straight side
+                    _enter(g, list(slot_outline(Slot(a, b, r))[:2]) if r > 0 else [a, b], -depth, o)
+                elif r <= 0:
+                    g.cut(z=-depth, feed=o.plunge)
+                else:
+                    top = -depths[k - 1] if k else 0.0
+                    g.cut(z=top, feed=o.plunge)
+                    drop = top + depth
+                    g.arc(ccw, *start(r), a, z=-depth, feed=_ramp_feed(o, math.hypot(math.tau * r, drop), drop))
+            ring(r)
+    g.lift()
+
+
+def _gcode_program(job: Job, sheet: Sheet, title: str, tool: int, ops: list[tuple[str, str, str]]) -> str:
+    s = job.settings
+    g = _Program(s)
+    names = []
+    for op, layer, label in ops:
+        o = _op_settings(s, op)
+        names.append(o.tool_name)
+        depths = _pass_depths(o.depth, o.step)
+        g.comment(f"{label.capitalize()}: {_num(o.depth)} mm deep in {len(depths)} pass{'es' if len(depths) > 1 else ''}, "
+                  f"feed {_num(o.feed)} mm/min, plunge {_num(o.plunge)} mm/min")
+        g.spindle(o.rpm)
+        if layer == "STAPLES":
+            for shape in _nearest_first(sheet.layers[layer], g):
+                _mill_hole(g, shape, depths, o, s.gcode_direction == "climb")
+        else:
+            for shape in _nearest_first(sheet.layers[layer], g):
+                for stroke in _strokes_nearest_first(shape, g):
+                    _engrave(g, stroke, depths, o)
+    g.lift()
+    g.spindle(0)
+    park_x, park_y = s.gcode_park_x, s.gcode_park_y
+    g.rapid(None if park_x is None else park_x + g.origin[0], None if park_y is None else park_y + g.origin[1])
+    g.lines.append("M30")
+
+    tool_names = " / ".join(n for n in dict.fromkeys(names) if n)
+    head = [
+        _gcode_comment(title),
+        _gcode_comment(f"Tool {tool}" + (f": {tool_names}" if tool_names else "")),
+        _gcode_comment(f"X0 Y0 = {ORIGIN_NAMES[s.gcode_origin]} of the sheet, Z0 = top of the material, units mm"),
+        _gcode_comment(f"About {max(1, round(g.minutes))} min at the set feeds, plus rapid moves"),
+        "G21 G90 G17 G94",  # millimetres, absolute coordinates, XY plane for arcs, feed in mm/min
+    ]
+    return "\n".join(head + g.lines) + "\n"
+
+
+def sheet_gcode(job: Job, sheet: Sheet, stem: str, title: str) -> dict[str, bytes]:
+    """One file per tool, in the order of GCODE_OPS; operations sharing a tool number share a file."""
+    s = job.settings
+    groups: dict[int, list[tuple[str, str, str]]] = {}
+    for op, layer, label in GCODE_OPS:
+        if getattr(s, f"gcode_{op}_enabled") and sheet.layers.get(layer):
+            groups.setdefault(getattr(s, f"gcode_{op}_tool"), []).append((op, layer, label))
+    files = {}
+    for number, (tool, ops) in enumerate(groups.items(), 1):
+        what = "+".join(op for op, _, _ in ops)
+        label = " and ".join(label for _, _, label in ops)
+        program = _gcode_program(job, sheet, f"{title}: {label}", tool, ops)
+        files[f"{stem}_{number}_{what}_T{tool}.{s.gcode_extension}"] = program.encode("ascii")
+    return files
 
 
 # --------------------------------------------------------------------------
@@ -823,6 +1200,9 @@ examples:
 """
 
 
+FORMATS = {"svg", "dxf", "dwg", "gcode"}
+
+
 def _parse_value(text: str) -> Any:
     try:
         return json.loads(text)
@@ -840,7 +1220,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-s", "--set", action="append", default=[], metavar="KEY=VALUE", help="override a setting")
     ap.add_argument("-o", "--out-dir", default="output", help="output directory (default: output)")
     ap.add_argument("-n", "--name", help="file name prefix (default: first-last code)")
-    ap.add_argument("--formats", default="svg,dxf", help="comma separated: svg, dxf, dwg (default: svg,dxf)")
+    ap.add_argument("--formats", default="svg,dxf,gcode",
+                    help="comma separated: svg, dxf, dwg, gcode (default: svg,dxf,gcode)")
     ap.add_argument("--list-presets", action="store_true", help="list presets and exit")
     ap.add_argument("--list-settings", action="store_true", help="list all settings with defaults and exit")
     args = ap.parse_args(argv)
@@ -883,8 +1264,8 @@ def main(argv: list[str] | None = None) -> int:
         if not codes:
             raise ValueError("No codes given (pass them as arguments or with --codes-file)")
         formats = {f.strip().lower() for f in args.formats.split(",") if f.strip()}
-        if formats - {"svg", "dxf", "dwg"}:
-            raise ValueError(f"Unknown format(s): {', '.join(sorted(formats - {'svg', 'dxf', 'dwg'}))}")
+        if formats - FORMATS:
+            raise ValueError(f"Unknown format(s): {', '.join(sorted(formats - FORMATS))}")
 
         job = build_job(codes, settings)
         name = safe_name(args.name) if args.name else default_name(codes)

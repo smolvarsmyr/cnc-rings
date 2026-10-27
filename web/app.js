@@ -93,7 +93,8 @@ function buildForm() {
     let container = $("#codes-fields");
     if (f.group !== "Codes") {
       if (!groups.has(f.group)) {
-        const details = el("details", { class: "group", open: true }, el("summary", {}, f.group));
+        // The G-code groups start folded away, as most of the time they are set once per machine.
+        const details = el("details", { class: "group", open: !f.group.startsWith("G-code") }, el("summary", {}, f.group));
         $("#form").append(details);
         groups.set(f.group, details);
       }
