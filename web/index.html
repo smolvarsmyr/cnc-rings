@@ -8,13 +8,16 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>Ring sheets</h1>
+    <h1>Ring sheets <span id="version" class="version"></span></h1>
     <div class="presets">
       <label for="preset">Preset</label>
       <select id="preset"></select>
       <span id="preset-dirty" class="dirty" hidden>modified</span>
       <button type="button" id="preset-save">Save preset…</button>
       <button type="button" id="preset-delete" class="quiet">Delete</button>
+      <button type="button" id="preset-export" class="quiet" title="Download all presets as a file">Export</button>
+      <button type="button" id="preset-import" class="quiet" title="Add presets from an exported file">Import…</button>
+      <input type="file" id="preset-file" accept=".json,application/json" hidden>
     </div>
   </header>
 

@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import webbrowser
 from pathlib import Path
 
@@ -16,6 +18,8 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 import generate_sheets as gs
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
+# Set by the Docker build to the git commit; shown in the page header.
+VERSION = os.environ.get("CNC_RINGS_VERSION") or "dev"
 MIME = {"svg": "image/svg+xml", "dxf": "application/dxf", "dwg": "application/acad", "zip": "application/zip"}
 
 app = Flask(__name__, static_folder=str(WEB_DIR), static_url_path="/static")
@@ -36,12 +40,35 @@ def schema():
     fields = [{"key": f.key, "default": f.default, "kind": f.kind, "group": f.group, "label": f.label,
                "help": f.help, "choices": list(f.choices), "minimum": f.minimum} for f in gs.FIELDS]
     return jsonify(fields=fields, fonts=gs.available_fonts(), dwg=gs.dwg_available(),
-                   layers={name: colour for name, (_, colour) in gs.LAYERS.items()})
+                   layers={name: colour for name, (_, colour) in gs.LAYERS.items()}, version=VERSION[:7])
 
 
 @app.get("/api/presets")
 def presets():
     return jsonify(gs.load_presets())
+
+
+@app.get("/api/presets/export")
+def export_presets():
+    payload = json.dumps(gs.load_presets(), indent=2, ensure_ascii=False) + "\n"
+    return Response(payload, mimetype="application/json",
+                    headers={"Content-Disposition": 'attachment; filename="cnc-rings-presets.json"'})
+
+
+@app.post("/api/presets/import")
+def import_presets():
+    """Merge presets from an exported file; presets with the same name are replaced."""
+    data = request.get_json(force=True)
+    if not isinstance(data, dict) or not all(isinstance(v, dict) for v in data.values()):
+        raise ValueError("Not a presets file: expected an object of preset name -> settings")
+    presets = gs.load_presets()
+    for name, raw in data.items():
+        if not str(name).strip():
+            raise ValueError("A preset needs a name")
+        settings, _ = gs.normalize_settings(raw)
+        presets[str(name).strip()] = vars(settings)
+    gs.save_presets(presets)
+    return jsonify(presets)
 
 
 @app.put("/api/presets/<path:name>")

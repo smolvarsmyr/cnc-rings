@@ -28,7 +28,7 @@ python3 -m venv .venv
 ```
 
 - Paste codes or ranges (`PL37..PM02`). The preview updates as you type.
-- Pick a preset, adjust settings, and use **Save preset…** to store the result in `presets.json`, e.g. one preset per species or ring size.
+- Pick a preset, adjust settings, and use **Save preset…** to store the result in `presets.json`, e.g. one preset per species or ring size. **Export** downloads all presets as a file, and **Import…** adds the presets from such a file, for example to copy them to another machine.
 - Click a plate in the preview to skip it for staples, or fill in rows × columns under *Skipped plates*.
 - Scroll to zoom, drag to pan, double-click to fit.
 - Download the SVG or DXF of the sheet on screen, or a zip of all sheets. The zip also contains `*_plates.csv`, which lists the sheet, row and column of each code, and `*_settings.json`.
@@ -47,6 +47,48 @@ Settings are applied in this order: defaults, then the preset (`-p`), then the J
 **Codes** are separated by new lines, commas or spaces. A range counts like an odometer, so `PL98..PM01` gives PL98, PL99, PM00, PM01. `PL98-PM01` also works when both ends have the same pattern of letters and digits. The *Letters left out of ranges* setting (e.g. `IOQ`) skips letters that are easy to confuse.
 
 When there are more codes than free plates, extra sheets are created.
+
+## Running it on a Raspberry Pi or any other computer
+
+Each push to `main` runs the tests in GitHub Actions. If they pass, the workflow builds a Docker image for amd64 (ordinary PCs), arm64 (Pi 3/4/5 and Apple Silicon on a 64-bit OS) and arm/v7 (Pi 2/3/4 on a 32-bit OS), and publishes it as `ghcr.io/smolvarsmyr/cnc-rings`. Every machine running `compose.yaml` checks for a new image every 15 minutes and switches to it by itself. The Pi 1 and Pi Zero (first model) are not supported.
+
+**Setting up a machine:**
+
+1. Install Docker.
+   - Raspberry Pi / Linux: `curl -fsSL https://get.docker.com | sh`, then `sudo usermod -aG docker $USER` and log in again.
+   - Windows / macOS: install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and turn on *Start Docker Desktop when you sign in*.
+2. Make a folder, put [`compose.yaml`](compose.yaml) in it, and run `docker compose up -d` in that folder.
+3. Open `http://<machine-name-or-ip>/`. The version (git commit) is shown next to the title.
+
+The app and the updater start again whenever Docker starts, so after a reboot everything comes back by itself.
+
+**Settings:** copy [`.env.example`](.env.example) to `.env` next to `compose.yaml` to change the port (`PORT`, default 80), how often the updater checks for a new version (`UPDATE_INTERVAL`), or to pin a version (`TAG=sha-<commit>`). Then run `docker compose up -d` again.
+
+**Presets** are kept in a Docker volume, outside the image, so updates never touch them. To move them to another machine, use **Export** and **Import…** in the web interface.
+
+**Useful commands** (run them in the folder with `compose.yaml`):
+
+```sh
+docker compose logs -f app       # what the app is doing
+docker compose logs -f updater   # when it last updated
+docker compose pull && docker compose up -d   # update now instead of waiting
+docker compose down              # stop (presets are kept)
+```
+
+**Rolling back:** every build is also tagged with its commit, e.g. `sha-dc74554`. To run an older build, set `TAG=sha-dc74554` in `.env` and run `docker compose up -d`. To follow `main` again, remove the line.
+
+## Development
+
+Work in the venv as described above. Saved presets go to `presets.json`, which git ignores. `presets.default.json` is used until you save the first preset, so to ship your presets as the defaults for new machines, copy `presets.json` over `presets.default.json`. Set `CNC_RINGS_DATA=/some/folder` to keep presets somewhere else.
+
+Before pushing, run the tests:
+
+```sh
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest
+```
+
+Pull requests only run the tests. Pushes to `main` are released. If the tests fail, nothing is published and the machines keep running the previous version.
 
 ## The photo preset
 
@@ -83,4 +125,6 @@ To make your own font, either:
 - `generate_sheets.py`: layout, SVG/DXF output, CLI. The settings list (`FIELDS`) also builds the web form.
 - `stroke_font.py`: loads single-line fonts and lays out text.
 - `webapp.py` and `web/`: the web interface (Flask).
-- `presets.json`: saved presets.
+- `presets.default.json`: the presets a new installation starts with. Saved presets go to `presets.json`.
+- `tests/`: smoke tests that gate every release.
+- `Dockerfile`, `compose.yaml`, `.github/workflows/release.yml`: building, publishing and running the image.

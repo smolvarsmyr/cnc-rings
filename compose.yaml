@@ -1,0 +1,36 @@
+# Copy this file (and optionally a .env next to it) to any machine with Docker, then run:
+#   docker compose up -d
+# The app starts with Docker from then on, and the updater installs new versions of main by itself.
+name: cnc-rings
+
+services:
+  app:
+    image: ghcr.io/smolvarsmyr/cnc-rings:${TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${PORT:-80}:8000"
+    volumes:
+      - data:/data
+
+  # Checks for a new image every UPDATE_INTERVAL seconds and restarts the app on it.
+  # Works the same on Linux, macOS and Windows (Docker Desktop), with nothing to set up on the host.
+  updater:
+    image: docker:28-cli
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/project:ro
+    working_dir: /project
+    environment:
+      UPDATE_INTERVAL: ${UPDATE_INTERVAL:-900}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while true; do
+          docker compose pull --quiet app && docker compose up -d --no-deps app && docker image prune -f > /dev/null
+          sleep "$$UPDATE_INTERVAL"
+        done
+
+volumes:
+  data:

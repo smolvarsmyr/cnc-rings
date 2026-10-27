@@ -247,6 +247,18 @@ async function deletePreset() {
   }
 }
 
+async function importPresets(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    const replaced = Object.keys(data).filter((name) => name in state.presets);
+    if (replaced.length && !confirm(`Replace these presets?\n\n${replaced.join("\n")}`)) return;
+    state.presets = await getJSON("/api/presets/import", { method: "POST", body: data });
+    renderPresets();
+  } catch (err) {
+    showMessages([], `Could not import ${file.name}: ${err.message}`);
+  }
+}
+
 // ---------------------------------------------------------------- generate + preview
 
 let timer = null;
@@ -459,6 +471,7 @@ async function init() {
   }
   buildForm();
   $('[data-download="dwg"]').hidden = !state.schema.dwg;
+  $("#version").textContent = state.schema.version;
 
   const saved = loadLocal();
   if (saved?.settings) {
@@ -489,6 +502,12 @@ async function init() {
   });
   $("#preset-save").addEventListener("click", savePreset);
   $("#preset-delete").addEventListener("click", deletePreset);
+  $("#preset-export").addEventListener("click", () => { location.href = "/api/presets/export"; });
+  $("#preset-import").addEventListener("click", () => $("#preset-file").click());
+  $("#preset-file").addEventListener("change", (e) => {
+    if (e.target.files[0]) importPresets(e.target.files[0]);
+    e.target.value = "";
+  });
   document.querySelectorAll("[data-download]").forEach((button) => {
     button.addEventListener("click", () => download(button.dataset.download));
   });

@@ -28,6 +28,7 @@ import csv
 import io
 import json
 import math
+import os
 import re
 import string
 import sys
@@ -44,7 +45,11 @@ from stroke_font import Point, Polyline, StrokeFont, load_font, rotate
 
 HERE = Path(__file__).resolve().parent
 FONTS_DIR = HERE / "fonts"
-PRESETS_FILE = HERE / "presets.json"
+# User data (saved presets) lives in CNC_RINGS_DATA, or next to the code when that is not set.
+# presets.default.json ships with the code and is used until presets are first saved.
+DATA_DIR = Path(os.environ.get("CNC_RINGS_DATA") or HERE)
+PRESETS_FILE = DATA_DIR / "presets.json"
+DEFAULT_PRESETS_FILE = HERE / "presets.default.json"
 EPS = 1e-6
 MAX_RANGE = 100_000
 
@@ -792,11 +797,14 @@ def get_font(name: str) -> StrokeFont:
 
 def load_presets(path: Path = PRESETS_FILE) -> dict[str, dict[str, Any]]:
     if not path.exists():
-        return {}
+        path = DEFAULT_PRESETS_FILE
+        if not path.exists():
+            return {}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def save_presets(presets: dict[str, dict[str, Any]], path: Path = PRESETS_FILE) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(presets, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     tmp.replace(path)

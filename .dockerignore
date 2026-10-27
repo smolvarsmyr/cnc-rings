@@ -1,0 +1,11 @@
+.git
+.github
+.venv
+__pycache__
+output
+tests
+presets.json
+*.tmp
+.env
+compose.yaml
+Dockerfile
