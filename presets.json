@@ -1,0 +1,110 @@
+{
+  "PL series 40x115 (photo)": {
+    "sheet_width": 600,
+    "sheet_height": 600,
+    "margin": 12,
+    "sheet_outline": true,
+    "plate_width": 40,
+    "plate_height": 115,
+    "columns": 14,
+    "rows": 5,
+    "fill_from": "bottom",
+    "font": "hershey_sans.json",
+    "copies": 4,
+    "text_height": 15.5,
+    "line_pitch": 21.5,
+    "padding_top": 5.5,
+    "padding_side": 2.5,
+    "text_valign": "top",
+    "width_scale": 0.6,
+    "letter_spacing": 0,
+    "text_angle": 0,
+    "range_skip_letters": "",
+    "skip_cells": [
+      [
+        2,
+        5
+      ],
+      [
+        2,
+        10
+      ],
+      [
+        4,
+        5
+      ],
+      [
+        4,
+        10
+      ]
+    ],
+    "edge_staples_x": 4,
+    "edge_staples_y": 4,
+    "edge_corner_offset": 55,
+    "edge_inset": null,
+    "edge_leg_spacing": 10,
+    "edge_hole_diameter": 5,
+    "edge_slot_length": 0,
+    "cell_staples": 1,
+    "cell_staple_pitch": 30,
+    "cell_leg_axis": "vertical",
+    "cell_leg_spacing": 10,
+    "cell_hole_diameter": 3.5,
+    "cell_slot_length": 8.5,
+    "dxf_version": "R2000"
+  },
+  "svaner": {
+    "sheet_width": 600.0,
+    "sheet_height": 600.0,
+    "margin": 12.0,
+    "sheet_outline": true,
+    "plate_width": 40.0,
+    "plate_height": 115.0,
+    "columns": 14,
+    "rows": 5,
+    "fill_from": "bottom",
+    "font": "hershey_sans.json",
+    "copies": 4,
+    "text_height": 14.0,
+    "line_pitch": 22.0,
+    "padding_top": 5.5,
+    "padding_side": 2.5,
+    "text_valign": "top",
+    "width_scale": 0.45,
+    "letter_spacing": 2.0,
+    "text_angle": 0.0,
+    "range_skip_letters": "",
+    "skip_cells": [
+      [
+        2,
+        5
+      ],
+      [
+        2,
+        10
+      ],
+      [
+        4,
+        5
+      ],
+      [
+        4,
+        10
+      ]
+    ],
+    "edge_staples_x": 3,
+    "edge_staples_y": 3,
+    "edge_corner_offset": 55.0,
+    "edge_inset": null,
+    "edge_leg_spacing": 10.0,
+    "edge_hole_diameter": 5.0,
+    "edge_slot_length": 0.0,
+    "cell_staples": 1,
+    "cell_staple_pitch": 30.0,
+    "cell_leg_axis": "vertical",
+    "cell_leg_spacing": 10.0,
+    "cell_hole_diameter": 3.5,
+    "cell_slot_length": 8.5,
+    "dxf_version": "R2000"
+  }
+}

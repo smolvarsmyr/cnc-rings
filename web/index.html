@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ring Sheets</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Ring sheets</h1>
+    <div class="presets">
+      <label for="preset">Preset</label>
+      <select id="preset"></select>
+      <span id="preset-dirty" class="dirty" hidden>modified</span>
+      <button type="button" id="preset-save">Save preset…</button>
+      <button type="button" id="preset-delete" class="quiet">Delete</button>
+    </div>
+  </header>
+
+  <main>
+    <aside class="settings">
+      <section class="codes">
+        <label for="codes" class="block-label">Codes</label>
+        <textarea id="codes" rows="6" spellcheck="false" placeholder="PL37..PM02"></textarea>
+        <p class="help">One per line or separated by commas or spaces. Ranges: <code>PL37..PM02</code> or <code>PL37-PM02</code>.</p>
+        <div id="codes-fields"></div>
+        <div class="field">
+          <label class="name" for="name">File name</label>
+          <span class="control"><input id="name" type="text" spellcheck="false" placeholder="auto"></span>
+        </div>
+      </section>
+      <form id="form" autocomplete="off"></form>
+    </aside>
+
+    <section class="workspace">
+      <div class="toolbar">
+        <div id="tabs" class="tabs"></div>
+        <div id="status" class="status"></div>
+        <div class="downloads">
+          <span class="muted">This sheet:</span>
+          <button type="button" data-download="svg">SVG</button>
+          <button type="button" data-download="dxf">DXF</button>
+          <button type="button" data-download="dwg" hidden>DWG</button>
+          <button type="button" data-download="zip" class="primary">All sheets (.zip)</button>
+        </div>
+      </div>
+      <div id="messages"></div>
+      <div id="preview" class="preview" title=""></div>
+      <div class="legend">
+        <span><i class="swatch text"></i>TEXT</span>
+        <span><i class="swatch grid"></i>GRID</span>
+        <span><i class="swatch staples"></i>STAPLES</span>
+        <span><i class="swatch sheet"></i>SHEET</span>
+        <span class="muted">Click a plate to skip it for staples · scroll to zoom · drag to pan · double-click to fit</span>
+      </div>
+      <div id="stats" class="stats"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
