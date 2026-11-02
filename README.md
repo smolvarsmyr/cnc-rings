@@ -133,12 +133,21 @@ The tests generate sheets from every default preset and check the SVG, DXF and w
 The app can also write G-code directly, so you don't need the CAM step. There is one file per tool and sheet, numbered in the order to run them:
 
 ```
-PL37-PM02_sheet01_1_staples_T1.ngc   staple holes, 3 mm end mill
-PL37-PM02_sheet01_2_text_T2.ngc      codes
-PL37-PM02_sheet01_3_grid_T3.ngc      grid lines, V-bit
+PL37-PM02_sheet01_1_staples_T1.ngc        staple holes, 4 mm end mill
+PL37-PM02_sheet01_2_text+grid_T2.ngc      codes and grid lines, 60° V-bit
 ```
 
-The settings are in the folded *G-code* groups at the bottom of the form, and they are saved with presets. The defaults copy the MillMage setup the sheets were cut with before: origin top-left, safe height 5 mm, 22.5° ramps, and the same tools, feeds and depths.
+The settings are in the folded *G-code* groups at the bottom of the form, and they are saved with presets. The defaults are for cast acrylic:
+
+| Operation | Tool | Speed | Feed / plunge | Depth |
+|---|---|---|---|---|
+| Staple holes | T1, 4 mm 2-flute end mill | 16000 rpm | 1500 / 300 mm/min | 2.5 mm, 1 mm per pass |
+| Text | T2, 60° V-bit, 0.7 mm tip | 18000 rpm | 1000 / 300 mm/min | 0.2 mm |
+| Grid lines | T2, the same V-bit | 18000 rpm | 1000 / 300 mm/min | 0.7 mm |
+
+The origin (top-left), the 5 mm safe height, the 22.5° ramps and the depths come from the MillMage setup the sheets were cut with before. Text and grid share tool 2, so they end up in one file. The 4 mm end mill is wider than the 3.5 mm slots in the skipped plates of the photo preset, so the app warns that those come out too big. Make the slots at least 4 mm wide, or use a smaller end mill for them.
+
+In acrylic, melted chips are a sign that the feed is too low for the spindle speed (too little chip load). Raise the feed or lower the speed rather than the other way round.
 
 - **G-code:** settings for the whole machine. These are the safe height for all moves between cuts, the height the tool rapids down to before it slows to the plunge rate, where X0 Y0 is (top-left, bottom-left or centre of the sheet; Z0 is always the top of the material), the ramp angle, the milling direction, the spindle spin-up wait, an optional park position, and the file extension.
 - **One group per operation** (staple holes, text, grid lines) with *Export*, a tool number and description, spindle speed, feed and plunge rate, depth and depth per pass. Operations with the same tool number go into the same file. Untick *Export* to leave an operation out. A spindle speed of 0 leaves out the spindle commands, for a router you switch on by hand.
@@ -150,6 +159,41 @@ How each operation is cut:
 - The tool never goes down faster than the plunge rate, also on ramps and helixes. All moves between cuts are at the safe height.
 
 The files use only common G-code (G0/G1/G2/G3, M3/M5, G4, M30, comments in parentheses), which runs on GRBL, LinuxCNC, Mach3/4 and UCCNC. The header gives the estimated cutting time. **Check new settings in a simulator such as [NC Viewer](https://ncviewer.com) or with an air cut before cutting a sheet.**
+
+### Sending G-code to the CNC computer
+
+**Send to CNC** copies the G-code of the sheet on screen straight to a shared folder on the computer that runs the machine. It replaces files with the same name. Set up the share with **CNC share…** next to it:
+
+| Setting | Example | |
+|---|---|---|
+| Server | `192.168.1.20` | IP address or name of the computer with the share. When the app runs in Docker, use the IP address, because Windows computer names often don't resolve inside a container. |
+| Share | `gcode` | The share name, as in `\\192.168.1.20\gcode`. |
+| Folder in the share | `rings` | Optional. The folder is created on the first send. |
+| Username / Password | `cnc` | A Windows (or Samba) account that may write to the share. For a domain account, use `DOMAIN\user`. |
+| Port | `445` | Only change it if the server uses a different port. |
+
+**Test connection** logs in and checks the share and the folder without saving anything. Error messages say what is wrong: wrong password, no such share, server unreachable, or no write access.
+
+**When the CNC computer is off,** the files wait in a queue:
+- **Every send is queued first.** If the share answers, the files are delivered straight away. If not, they stay in the queue, which is kept in `queue/` in the data folder, so it survives a restart.
+- **The queue is checked every 5 minutes** while anything is waiting, and once when the app starts. The check opens a connection to the share's port (445) rather than sending a ping, because Windows blocks ping by default and the open port is what matters.
+- **Delivery is oldest first,** as soon as the share answers. Sending the same sheet again replaces its waiting copy.
+- **The *n waiting* button** next to **Send to CNC** opens the queue. There you can see when it was last checked, remove a send, or press **Send now**.
+- **Retries pause on other errors.** If delivery fails with a wrong password or missing write access, automatic retries stop, because Windows can lock an account after repeated failed logins. They resume when you save the share settings or press **Send now**.
+- **Docker logs:** `docker compose logs app` shows a line for every send the queue delivers.
+
+On the Windows computer, share a folder as follows:
+1. Right-click the folder → *Properties* → *Sharing* → *Advanced Sharing*.
+2. Tick *Share this folder*.
+3. Under *Permissions*, give the user *Change* access.
+
+It's best to use a separate local user that can only reach this share.
+
+**Where the settings are kept:**
+- **Per installation:** the share settings belong to the installation, not to a preset, so exporting presets never includes them.
+- **Location:** they are saved in `smb.json` in the data folder. That's the Docker volume, or the repo folder when you run from the code, where git ignores it.
+- **Password:** it is stored there **in plain text** and is never sent back to the browser. To keep it, leave the password field empty when you change other settings.
+- **Who can use it:** the web interface has no login, so anyone who can open it can send files to the share or change these settings.
 
 ## DWG
 
@@ -182,6 +226,8 @@ To make your own font, either:
 - `generate_sheets.py`: layout, SVG/DXF/G-code output, CLI. The settings list (`FIELDS`) also builds the web form.
 - `stroke_font.py`: loads single-line fonts and lays out text.
 - `webapp.py` and `web/`: the web interface (Flask).
+- `smb_share.py`: sending G-code to a Windows or Samba share.
+- `send_queue.py`: the queue that holds G-code while the share is offline, and the thread that delivers it.
 - `presets.default.json`: the presets a new installation starts with. Saved presets go to `presets.json`.
 - `tests/`: smoke tests that gate every release.
 - `Dockerfile`, `compose.yaml`, `.github/workflows/release.yml`: building, publishing and running the image.

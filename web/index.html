@@ -47,6 +47,11 @@
           <button type="button" data-download="dwg" hidden>DWG</button>
           <button type="button" data-download="gcode" title="One file per tool (a .zip when there is more than one)">G-code</button>
           <button type="button" data-download="zip" class="primary">All sheets (.zip)</button>
+          <span class="send">
+            <button type="button" id="smb-send" title="Copy the G-code of this sheet to the CNC share">Send to CNC</button>
+            <button type="button" id="queue-badge" class="queue-badge" title="Waiting for the CNC share to come online" hidden></button>
+            <button type="button" id="smb-open" class="quiet" title="Where Send to CNC copies the files">CNC share…</button>
+          </span>
         </div>
       </div>
       <div id="messages"></div>
@@ -61,6 +66,53 @@
       <div id="stats" class="stats"></div>
     </section>
   </main>
+
+  <dialog id="smb-dialog">
+    <form id="smb-form" method="dialog" autocomplete="off">
+      <h2>CNC share</h2>
+      <p class="help">Send to CNC copies the G-code of the sheet on screen to this Windows or Samba shared folder, replacing files with the same name. These settings belong to this installation, not to a preset.</p>
+      <div class="field">
+        <label class="name" for="smb-server">Server</label>
+        <span class="control"><input id="smb-server" name="server" type="text" spellcheck="false" placeholder="192.168.1.20" required></span>
+        <p class="help">IP address or name of the computer with the share. Inside Docker, the IP address is the safest.</p>
+      </div>
+      <div class="field">
+        <label class="name" for="smb-share">Share</label>
+        <span class="control"><input id="smb-share" name="share" type="text" spellcheck="false" placeholder="gcode" required></span>
+      </div>
+      <div class="field">
+        <label class="name" for="smb-folder">Folder in the share</label>
+        <span class="control"><input id="smb-folder" name="folder" type="text" spellcheck="false" placeholder="optional, e.g. rings"></span>
+      </div>
+      <div class="field">
+        <label class="name" for="smb-username">Username</label>
+        <span class="control"><input id="smb-username" name="username" type="text" spellcheck="false" autocomplete="off"></span>
+        <p class="help">For a domain account: DOMAIN\user.</p>
+      </div>
+      <div class="field">
+        <label class="name" for="smb-password">Password</label>
+        <span class="control"><input id="smb-password" name="password" type="password" autocomplete="new-password"></span>
+        <p class="help">Leave empty to keep the saved password. Stored in plain text on this server.</p>
+      </div>
+      <div class="field">
+        <label class="name" for="smb-port">Port</label>
+        <span class="control"><input id="smb-port" name="port" type="number" min="1" max="65535" step="1" placeholder="445"></span>
+      </div>
+      <div id="smb-result" class="smb-result" hidden></div>
+      <section id="queue" class="queue" hidden>
+        <h3>Waiting to be sent</h3>
+        <ul id="queue-list"></ul>
+        <p id="queue-info" class="help"></p>
+        <button type="button" id="queue-send">Send now</button>
+      </section>
+      <div class="dialog-buttons">
+        <button type="button" id="smb-test">Test connection</button>
+        <span class="spacer"></span>
+        <button type="button" id="smb-cancel" class="quiet">Cancel</button>
+        <button type="submit" id="smb-save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="/static/app.js"></script>
 </body>

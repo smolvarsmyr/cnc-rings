@@ -183,10 +183,13 @@ FIELDS = (
     Field("gcode_park_y", None, "auto_mm", "G-code", "Park at Y"),
     Field("gcode_extension", "ngc", "choice", "G-code", "File extension", choices=("ngc", "nc", "gcode", "tap", "cnc")),
 
-    *_gcode_fields("staples", "G-code: staple holes", 1, "3 mm 2 flute end mill", 18000, feed=1500.0, plunge=400.0,
-                   depth=2.5, step=1.0, diameter=3.0),
-    *_gcode_fields("text", "G-code: text", 2, "engraving bit", 1000, feed=600.0, plunge=120.0, depth=0.2, step=0.0),
-    *_gcode_fields("grid", "G-code: grid lines", 3, "45° 2 flute V-bit", 18000, feed=1143.0, plunge=400.0,
+    # Defaults for cast acrylic: a 4 mm end mill for the staple holes, and one V-bit for the text and the grid,
+    # so those two share a file. Depths are from the MillMage setup for 2.5 mm sheets.
+    *_gcode_fields("staples", "G-code: staple holes", 1, "4 mm 2 flute end mill", 16000, feed=1500.0, plunge=300.0,
+                   depth=2.5, step=1.0, diameter=4.0),
+    *_gcode_fields("text", "G-code: text", 2, "60° V-bit, 0.7 mm tip", 18000, feed=1000.0, plunge=300.0, depth=0.2,
+                   step=0.0),
+    *_gcode_fields("grid", "G-code: grid lines", 2, "60° V-bit, 0.7 mm tip", 18000, feed=1000.0, plunge=300.0,
                    depth=0.7, step=0.0),
 )
 FIELD_BY_KEY = {f.key: f for f in FIELDS}

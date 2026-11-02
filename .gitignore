@@ -4,3 +4,5 @@ output/
 *.tmp
 presets.json
 gcodeexamples/
+smb.json
+queue/

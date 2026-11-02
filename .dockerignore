@@ -9,3 +9,6 @@ presets.json
 .env
 compose.yaml
 Dockerfile
+smb.json
+queue
+gcodeexamples

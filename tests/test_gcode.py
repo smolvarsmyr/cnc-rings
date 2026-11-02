@@ -70,10 +70,11 @@ def simulate(program, s, plunge):
     return moves
 
 
-def check_file(program, s, op):
-    o = gs._op_settings(s, op)
-    moves = simulate(program, s, o.plunge)
-    assert min(end["Z"] for _, _, end in moves) == pytest.approx(-o.depth)
+def check_file(program, s, ops):
+    """ops: the operations in the file, as in its name, e.g. "text+grid"."""
+    settings = [gs._op_settings(s, op) for op in ops.split("+")]
+    moves = simulate(program, s, max(o.plunge for o in settings))
+    assert min(end["Z"] for _, _, end in moves) == pytest.approx(-max(o.depth for o in settings))
     xs = [end["X"] for _, _, end in moves if end["X"] is not None]
     ys = [end["Y"] for _, _, end in moves if end["Y"] is not None]
     origin = {"bottom-left": (0, 0), "top-left": (0, s.sheet_height), "center": (s.sheet_width / 2, s.sheet_height / 2)}
@@ -86,7 +87,7 @@ def check_file(program, s, op):
 def test_one_file_per_tool_in_order():
     job = make_job()
     files = gcode_files(job)
-    assert list(files) == ["t_1_staples_T1.ngc", "t_2_text_T2.ngc", "t_3_grid_T3.ngc"]
+    assert list(files) == ["t_1_staples_T1.ngc", "t_2_text+grid_T2.ngc"]  # text and grid share the V-bit
     for name, program in files.items():
         check_file(program, job.settings, name.split("_")[2])
 
@@ -98,15 +99,17 @@ def test_origin(origin):
         check_file(program, job.settings, name.split("_")[2])
 
 
-def test_shared_tool_shares_a_file():
-    job = make_job(gcode_text_tool=3)
-    files = gcode_files(job)
-    assert list(files) == ["t_1_staples_T1.ngc", "t_2_text+grid_T3.ngc"]
-    assert "(Text:" in files["t_2_text+grid_T3.ngc"] and "(Grid lines:" in files["t_2_text+grid_T3.ngc"]
+def test_tools_decide_the_files():
+    files = gcode_files(make_job())
+    assert "(Text:" in files["t_2_text+grid_T2.ngc"] and "(Grid lines:" in files["t_2_text+grid_T2.ngc"]
+    job = make_job(gcode_grid_tool=3)
+    assert list(gcode_files(job)) == ["t_1_staples_T1.ngc", "t_2_text_T2.ngc", "t_3_grid_T3.ngc"]
+    for name, program in gcode_files(job).items():
+        check_file(program, job.settings, name.split("_")[2])
 
 
 def test_disabled_operations_are_left_out():
-    assert list(gcode_files(make_job(gcode_text_enabled=False))) == ["t_1_staples_T1.ngc", "t_2_grid_T3.ngc"]
+    assert list(gcode_files(make_job(gcode_text_enabled=False))) == ["t_1_staples_T1.ngc", "t_2_grid_T2.ngc"]
     off = {f"gcode_{op}_enabled": False for op, _, _ in gs.GCODE_OPS}
     assert gcode_files(make_job(**off)) == {}
 
@@ -135,21 +138,21 @@ def test_tool_wider_than_holes_warns():
 
 
 def test_ramp_and_plunge_entries():
-    ramped = gcode_files(make_job())["t_3_grid_T3.ngc"]
+    ramped = gcode_files(make_job(gcode_text_enabled=False))["t_2_grid_T2.ngc"]
     assert re.search(r"^G1 X[\d.]+ Z-0.35", ramped, re.M)  # down half way along the line, then back
-    straight = gcode_files(make_job(gcode_ramp_angle=0))["t_3_grid_T3.ngc"]
+    straight = gcode_files(make_job(gcode_text_enabled=False, gcode_ramp_angle=0))["t_2_grid_T2.ngc"]
     assert not re.search(r"^G1 (?=.*[XY])(?=.*Z)", straight, re.M)
 
 
 def test_passes_park_and_spindle():
-    job = make_job(gcode_text_step=0.1, gcode_text_rpm=0, gcode_park_x=0, gcode_park_y=0)
+    job = make_job(gcode_text_step=0.1, gcode_text_rpm=0, gcode_grid_enabled=False, gcode_park_x=0, gcode_park_y=0)
     files = gcode_files(job)
     text = files["t_2_text_T2.ngc"]
     check_file(text, job.settings, "text")
     assert "Z-0.1 " in text or "Z-0.1\n" in text
     assert not re.search(r"^M[35]\b", text, re.M)
     assert text.splitlines()[-2] == "G0 X0 Y0"
-    assert "M3 S18000" in files["t_1_staples_T1.ngc"] and "M5" in files["t_1_staples_T1.ngc"]
+    assert "M3 S16000" in files["t_1_staples_T1.ngc"] and "M5" in files["t_1_staples_T1.ngc"]
 
 
 def test_web_download():
@@ -159,7 +162,7 @@ def test_web_download():
     response = client.post("/api/download", json=body)
     assert response.status_code == 200
     assert zipfile.ZipFile(io.BytesIO(response.data)).namelist() == [
-        "PL37-PL40_sheet01_1_staples_T1.ngc", "PL37-PL40_sheet01_2_text_T2.ngc", "PL37-PL40_sheet01_3_grid_T3.ngc"]
+        "PL37-PL40_sheet01_1_staples_T1.ngc", "PL37-PL40_sheet01_2_text+grid_T2.ngc"]
 
     only_grid = {**settings, "gcode_staples_enabled": False, "gcode_text_enabled": False}
     response = client.post("/api/download", json={**body, "settings": only_grid})
