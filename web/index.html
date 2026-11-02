@@ -73,12 +73,12 @@
       <p class="help">Send to CNC copies the G-code of the sheet on screen to this Windows or Samba shared folder, replacing files with the same name. These settings belong to this installation, not to a preset.</p>
       <div class="field">
         <label class="name" for="smb-server">Server</label>
-        <span class="control"><input id="smb-server" name="server" type="text" spellcheck="false" placeholder="192.168.1.20" required></span>
-        <p class="help">IP address or name of the computer with the share. Inside Docker, the IP address is the safest.</p>
+        <span class="control"><input id="smb-server" name="server" type="text" spellcheck="false" placeholder="192.168.1.201" required></span>
+        <p class="help">IP address of the computer or CNC controller with the share. A whole address such as 192.168.1.201/cncdisk also works; it fills in the share for you.</p>
       </div>
       <div class="field">
         <label class="name" for="smb-share">Share</label>
-        <span class="control"><input id="smb-share" name="share" type="text" spellcheck="false" placeholder="gcode" required></span>
+        <span class="control"><input id="smb-share" name="share" type="text" spellcheck="false" placeholder="CNCDISK" required></span>
       </div>
       <div class="field">
         <label class="name" for="smb-folder">Folder in the share</label>
@@ -87,7 +87,7 @@
       <div class="field">
         <label class="name" for="smb-username">Username</label>
         <span class="control"><input id="smb-username" name="username" type="text" spellcheck="false" autocomplete="off"></span>
-        <p class="help">For a domain account: DOMAIN\user.</p>
+        <p class="help">Leave empty for guest access, which CNC controllers often use. For a domain account: DOMAIN\user.</p>
       </div>
       <div class="field">
         <label class="name" for="smb-password">Password</label>

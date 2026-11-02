@@ -162,14 +162,14 @@ The files use only common G-code (G0/G1/G2/G3, M3/M5, G4, M30, comments in paren
 
 ### Sending G-code to the CNC computer
 
-**Send to CNC** copies the G-code of the sheet on screen straight to a shared folder on the computer that runs the machine. It replaces files with the same name. Set up the share with **CNC share…** next to it:
+**Send to CNC** copies the G-code of the sheet on screen straight to a shared folder on the computer or controller that runs the machine. It replaces files with the same name. It works with SMB1 as well as SMB2/3, because the Samba servers built into CNC controllers often only speak SMB1. Set up the share with **CNC share…** next to it:
 
 | Setting | Example | |
 |---|---|---|
-| Server | `192.168.1.20` | IP address or name of the computer with the share. When the app runs in Docker, use the IP address, because Windows computer names often don't resolve inside a container. |
-| Share | `gcode` | The share name, as in `\\192.168.1.20\gcode`. |
+| Server | `192.168.1.201` | IP address of the computer or controller with the share. When the app runs in Docker, use the IP address, because computer names often don't resolve inside a container. A whole address such as `192.168.1.201/cncdisk` or `\\192.168.1.201\CNCDISK\rings` also works, and fills in the share and folder. |
+| Share | `CNCDISK` | The share name. If the name is wrong, **Test connection** lists the shares the server has. |
 | Folder in the share | `rings` | Optional. The folder is created on the first send. |
-| Username / Password | `cnc` | A Windows (or Samba) account that may write to the share. For a domain account, use `DOMAIN\user`. |
+| Username / Password | `cnc` | A Windows (or Samba) account that may write to the share. Leave both empty for guest access, which CNC controllers often use. For a domain account, use `DOMAIN\user`. |
 | Port | `445` | Only change it if the server uses a different port. |
 
 **Test connection** logs in and checks the share and the folder without saving anything. Error messages say what is wrong: wrong password, no such share, server unreachable, or no write access.
@@ -226,7 +226,7 @@ To make your own font, either:
 - `generate_sheets.py`: layout, SVG/DXF/G-code output, CLI. The settings list (`FIELDS`) also builds the web form.
 - `stroke_font.py`: loads single-line fonts and lays out text.
 - `webapp.py` and `web/`: the web interface (Flask).
-- `smb_share.py`: sending G-code to a Windows or Samba share.
+- `smb_share.py`: sending G-code to a Windows or Samba share (pysmb, SMB1 and SMB2).
 - `send_queue.py`: the queue that holds G-code while the share is offline, and the thread that delivers it.
 - `presets.default.json`: the presets a new installation starts with. Saved presets go to `presets.json`.
 - `tests/`: smoke tests that gate every release.

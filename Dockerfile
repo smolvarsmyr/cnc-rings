@@ -1,11 +1,10 @@
 # Runs the web interface. Built for amd64, arm64 and arm/v7 by .github/workflows/release.yml.
 FROM debian:trixie-slim
 
-# numpy (needed by ezdxf) and cffi (needed by smbprotocol's cryptography) have no 32-bit ARM wheels on PyPI,
-# so take Debian's builds and pip-install the rest into a venv that can see them. This keeps the arm/v7 build
-# from compiling them under emulation.
+# numpy (needed by ezdxf) has no 32-bit ARM wheels on PyPI, so take Debian's build and pip-install the rest
+# into a venv that can see it. This keeps the arm/v7 build from compiling numpy under emulation.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-venv python3-numpy python3-cryptography python3-cffi \
+    && apt-get install -y --no-install-recommends python3 python3-venv python3-numpy \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv --system-site-packages /venv
 

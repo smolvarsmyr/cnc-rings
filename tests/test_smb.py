@@ -1,12 +1,11 @@
-"""CNC share settings and sending, against a fake smbclient that keeps the files in memory."""
+"""CNC share settings and sending, against a fake pysmb connection that keeps the files in memory."""
 
-import errno
 import shutil
 import stat
-import sys
 import types
 
 import pytest
+from smb.base import OperationFailure
 
 import generate_sheets as gs
 import send_queue
@@ -18,54 +17,52 @@ FORM = {"server": "\\\\cnc-pc", "share": "gcode", "folder": "rings/2026", "usern
 
 
 class FakeShare:
-    """Just enough of smbclient: one server with one share, and a password to check."""
+    """Just enough of pysmb's SMBConnection: one server with one share, and a password to check."""
 
     def __init__(self):
-        self.files: dict[str, bytes] = {}
-        self.dirs = {"\\\\cnc-pc\\gcode"}
+        self.files: dict[str, bytes] = {}  # by UNC path
+        self.dirs = {"/"}  # paths inside the share
         self.logins = []
         self.online = True
 
-    def module(self):
+    def connection(self, username, password, my_name, remote_name, domain="", is_direct_tcp=False):
         share = self
-        mod = types.ModuleType("smbclient")
 
-        def register_session(server, username=None, password=None, **kwargs):
-            share.logins.append((server, username, password, kwargs["port"]))
-            if password != "s3cret":
-                raise ValueError("STATUS_LOGON_FAILURE")
+        class Connection:
+            isUsingSMB2 = True
 
-        def mkdir(path, **kwargs):
-            if path in share.dirs:
-                raise OSError(errno.EEXIST, "STATUS_OBJECT_NAME_COLLISION")
-            share.dirs.add(path)
+            def connect(self, ip, port, timeout=60):
+                share.logins.append((ip, username, password, port))
+                if not share.online:
+                    raise ConnectionRefusedError(111, "Connection refused")
+                return password == "s3cret"
 
-        class Writer:
-            def __init__(self, path):
-                self.path = path
+            def listShares(self, timeout=30):
+                return [types.SimpleNamespace(name=n, isSpecial=False) for n in ("gcode", "IPC$")]
 
-            def __enter__(self):
-                return self
+            def getAttributes(self, service, path, timeout=30):
+                if path not in share.dirs:
+                    raise OperationFailure("not found", [])
+                return types.SimpleNamespace(isDirectory=True)
 
-            def __exit__(self, *exc):
-                return False
+            def createDirectory(self, service, path, timeout=30):
+                assert path.rsplit("/", 1)[0] or "/" in share.dirs, "parent folder missing"
+                share.dirs.add(path)
 
-            def write(self, data):
-                assert self.path.rsplit("\\", 1)[0] in share.dirs, "folder missing"
-                share.files[self.path] = data
+            def storeFile(self, service, path, file_obj, timeout=30):
+                assert path.rsplit("/", 1)[0] in share.dirs, "folder missing"
+                share.files["\\\\cnc-pc\\" + service + path.replace("/", "\\")] = file_obj.read()
 
-        mod.register_session = register_session
-        mod.reset_connection_cache = lambda **kwargs: None
-        mod.mkdir = mkdir
-        mod.open_file = lambda path, mode, **kwargs: Writer(path)
-        mod.path = types.SimpleNamespace(isdir=lambda path, **kwargs: path in share.dirs)
-        return mod
+            def close(self):
+                pass
+
+        return Connection()
 
 
 @pytest.fixture
 def share(monkeypatch):
     fake = FakeShare()
-    monkeypatch.setitem(sys.modules, "smbclient", fake.module())
+    monkeypatch.setattr(smb_share, "SMBConnection", fake.connection)
     monkeypatch.setattr(smb_share, "reachable", lambda config, timeout=3: fake.online)
     for path in (smb_share.CONFIG_FILE, send_queue.QUEUE_DIR):
         shutil.rmtree(path, ignore_errors=True) if path.is_dir() else path.unlink(missing_ok=True)
@@ -104,9 +101,29 @@ def test_bad_settings(share, client):
 def test_connection_test(share, client):
     assert "does not exist yet" in client.post("/api/smb/test", json=FORM).get_json()["message"]
     assert "wrong username or password" in client.post("/api/smb/test", json={**FORM, "password": "x"}).get_json()["error"]
-    assert "no share" in client.post("/api/smb/test", json={**FORM, "share": "nope"}).get_json()["error"]
-    share.dirs |= {"\\\\cnc-pc\\gcode\\rings", "\\\\cnc-pc\\gcode\\rings\\2026"}
-    assert client.post("/api/smb/test", json=FORM).get_json() == {"message": "Connected to \\\\cnc-pc\\gcode\\rings\\2026."}
+    error = client.post("/api/smb/test", json={**FORM, "share": "nope"}).get_json()["error"]
+    assert "there is no share called nope; the server has: gcode" in error
+    share.dirs |= {"/rings", "/rings/2026"}
+    assert client.post("/api/smb/test", json=FORM).get_json() == {
+        "message": "Connected to \\\\cnc-pc\\gcode\\rings\\2026 (SMB2)."}
+
+
+@pytest.mark.parametrize("server, share_name, folder", [
+    ("192.168.1.201/cncdisk", "cncdisk", "from the folder field"),  # no folder in the address: keep the field
+    ("\\\\192.168.1.201\\CNCDISK\\rings", "CNCDISK", "rings"),
+    ("smb://192.168.1.201/CNCDISK/rings/2026", "CNCDISK", "rings\\2026"),
+])
+def test_whole_address_in_server_field(server, share_name, folder):
+    form = {"server": server, "share": "ignored", "folder": "from the folder field"}
+    config = smb_share.merge_config(form, smb_share.DEFAULTS)
+    assert (config["server"], config["share"], config["folder"]) == ("192.168.1.201", share_name, folder)
+
+
+def test_guest_and_domain_logins(share):
+    smb_share.test(smb_share.merge_config({**FORM, "username": "", "password": "s3cret"}, smb_share.DEFAULTS))
+    assert share.logins[-1][1:3] == ("", "s3cret")
+    smb_share.test(smb_share.merge_config({**FORM, "username": "WORKSHOP\\cnc"}, smb_share.DEFAULTS))
+    assert share.logins[-1][1] == "cnc"
 
 
 SETTINGS = gs.load_presets(gs.DEFAULT_PRESETS_FILE)["PL series 40x115 (photo)"]
