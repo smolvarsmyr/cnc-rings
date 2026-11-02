@@ -93,7 +93,8 @@ function buildForm() {
     let container = $("#codes-fields");
     if (f.group !== "Codes") {
       if (!groups.has(f.group)) {
-        const details = el("details", { class: "group", open: true }, el("summary", {}, f.group));
+        // The G-code groups start folded away, as most of the time they are set once per machine.
+        const details = el("details", { class: "group", open: !f.group.startsWith("G-code") }, el("summary", {}, f.group));
         $("#form").append(details);
         groups.set(f.group, details);
       }
@@ -423,6 +424,135 @@ function setupPreview() {
   });
 }
 
+// ---------------------------------------------------------------- CNC share
+
+function showNotice(text) {
+  $("#messages").prepend(el("div", { class: "message ok" }, text));
+}
+
+function smbResult(text, ok) {
+  const box = $("#smb-result");
+  box.hidden = false;
+  box.className = `smb-result message ${ok ? "ok" : "error"}`;
+  box.textContent = text;
+}
+
+const smbForm = () => {
+  const form = Object.fromEntries(new FormData($("#smb-form")));
+  return { ...form, port: form.port || 445 };
+};
+
+const clock = (seconds) => new Date(seconds * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+
+function renderQueue(queue) {
+  state.queue = queue;
+  const n = queue.jobs.length;
+  $("#queue-badge").hidden = n === 0;
+  $("#queue-badge").textContent = `${n} waiting`;
+  $("#queue").hidden = n === 0;
+  $("#queue-list").replaceChildren(...queue.jobs.map((job) => {
+    const remove = el("button", { type: "button", class: "quiet", title: "Remove from the queue" }, "Remove");
+    remove.addEventListener("click", async () => {
+      renderQueue(await getJSON(`/api/smb/queue/${encodeURIComponent(job.id)}`, { method: "DELETE" }));
+    });
+    return el("li", {},
+      el("span", {}, `${job.label} (${job.files.length} file${job.files.length === 1 ? "" : "s"})`,
+        el("span", { class: "when" }, ` · queued ${clock(job.created)}`)),
+      remove,
+      job.error ? el("span", { class: "error" }, job.error) : null);
+  }));
+  const info = [];
+  if (queue.paused) info.push("Automatic retries are paused after the error above: fix the settings and save, or press Send now.");
+  else if (queue.next_check) info.push(`Next check ${clock(queue.next_check)}, then every ${Math.round(queue.interval / 60)} minutes.`);
+  if (queue.last_check) info.push(`Last checked ${clock(queue.last_check)}: ${queue.online ? "the share answered" : "no answer"}.`);
+  $("#queue-info").textContent = info.join(" ");
+}
+
+async function refreshQueue() {
+  try {
+    renderQueue(await getJSON("/api/smb/queue"));
+  } catch {
+    // the server may be restarting; the next refresh will catch up
+  }
+}
+
+async function sendQueue() {
+  const button = $("#queue-send");
+  button.disabled = true;
+  button.textContent = "Sending…";
+  try {
+    renderQueue(await getJSON("/api/smb/queue/send", { method: "POST" }));
+    if (!state.queue.jobs.length) smbResult("Everything in the queue was sent.", true);
+  } catch (err) {
+    smbResult(err.message, false);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Send now";
+  }
+}
+
+async function openSmb() {
+  try {
+    const config = await getJSON("/api/smb");
+    for (const key of ["server", "share", "folder", "username", "port"]) $(`#smb-${key}`).value = config[key] ?? "";
+    $("#smb-password").value = "";
+    $("#smb-password").placeholder = config.password_set ? "saved" : "";
+    $("#smb-result").hidden = true;
+    await refreshQueue();
+    $("#smb-dialog").showModal();
+  } catch (err) {
+    showMessages(state.result?.warnings ?? [], err.message);
+  }
+}
+
+async function testSmb() {
+  smbResult("Connecting…", true);
+  try {
+    smbResult((await getJSON("/api/smb/test", { method: "POST", body: smbForm() })).message, true);
+  } catch (err) {
+    smbResult(err.message, false);
+  }
+}
+
+async function saveSmb(e) {
+  e.preventDefault();
+  if (!$("#smb-form").reportValidity()) return;
+  try {
+    await getJSON("/api/smb", { method: "PUT", body: smbForm() });
+    $("#smb-dialog").close();
+  } catch (err) {
+    smbResult(err.message, false);
+  }
+}
+
+async function sendToCnc() {
+  const button = $("#smb-send");
+  try {
+    if (!(await getJSON("/api/smb")).configured) {
+      openSmb();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Sending…";
+    const result = await getJSON("/api/smb/send", { method: "POST", body: payload({ sheet: state.sheet + 1 }) });
+    if (result.sent) {
+      showNotice(`Sent ${result.sent.length} file${result.sent.length === 1 ? "" : "s"}: ${result.sent.join(", ")}`);
+    } else {
+      const n = result.queued.length;
+      showMessages([
+        `Not sent yet, ${n} file${n === 1 ? " is" : "s are"} waiting in the queue: ${result.reason}. ` +
+        `They are sent when the share answers (checked every ${Math.round(result.queue.interval / 60)} minutes).`,
+        ...(state.result?.warnings ?? [])]);
+    }
+    await refreshQueue();
+  } catch (err) {
+    showMessages(state.result?.warnings ?? [], `Could not send to the CNC share: ${err.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Send to CNC";
+  }
+}
+
 // ---------------------------------------------------------------- downloads + storage
 
 async function download(format) {
@@ -508,6 +638,15 @@ async function init() {
     if (e.target.files[0]) importPresets(e.target.files[0]);
     e.target.value = "";
   });
+  $("#smb-send").addEventListener("click", sendToCnc);
+  $("#smb-open").addEventListener("click", openSmb);
+  $("#smb-test").addEventListener("click", testSmb);
+  $("#smb-cancel").addEventListener("click", () => $("#smb-dialog").close());
+  $("#smb-form").addEventListener("submit", saveSmb);
+  $("#queue-badge").addEventListener("click", openSmb);
+  $("#queue-send").addEventListener("click", sendQueue);
+  refreshQueue();
+  setInterval(refreshQueue, 30000);
   document.querySelectorAll("[data-download]").forEach((button) => {
     button.addEventListener("click", () => download(button.dataset.download));
   });

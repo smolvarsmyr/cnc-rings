@@ -3,3 +3,6 @@ __pycache__/
 output/
 *.tmp
 presets.json
+gcodeexamples/
+smb.json
+queue/
