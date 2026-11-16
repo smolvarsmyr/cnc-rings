@@ -170,7 +170,8 @@ FIELDS = (
     Field("gcode_plunge_z", 1.0, "mm", "G-code", "Rapid down to",
           "Height above the material where the tool slows down to the plunge rate.", minimum=0),
     Field("gcode_origin", "top-left", "choice", "G-code", "X0 Y0 is at",
-          "The point of the sheet the machine is zeroed on.", ("bottom-left", "top-left", "center")),
+          "The point of the sheet the machine is zeroed on, shown as a green square in the preview.",
+          ("top-left", "top-right", "bottom-left", "bottom-right", "center")),
     Field("gcode_ramp_angle", 22.5, "number", "G-code", "Ramp angle (°)",
           "Lines and slots are entered by ramping down along the first bit of the path and back. "
           "0 = plunge straight down.", minimum=0),
@@ -841,7 +842,15 @@ def zip_files(files: dict[str, bytes]) -> bytes:
 GCODE_OPS = (("staples", "STAPLES", "staple holes"), ("text", "TEXT", "text"), ("grid", "GRID", "grid lines"))
 STEPOVER = 0.4  # of the tool diameter, between the rings that mill out a staple hole wider than the tool
 PECK_CLEARANCE = 0.2  # mm above the bottom of a hole to rapid back down to between pecks
-ORIGIN_NAMES = {"bottom-left": "bottom-left corner", "top-left": "top-left corner", "center": "centre"}
+ORIGIN_NAMES = {"top-left": "top-left corner", "top-right": "top-right corner", "bottom-left": "bottom-left corner",
+                "bottom-right": "bottom-right corner", "center": "centre"}
+
+
+def gcode_origin(s: SimpleNamespace) -> Point:
+    """Where G-code X0 Y0 is, in sheet coordinates."""
+    x = {"left": 0.0, "right": s.sheet_width}.get(s.gcode_origin.partition("-")[2], s.sheet_width / 2)
+    y = {"bottom": 0.0, "top": s.sheet_height}.get(s.gcode_origin.partition("-")[0], s.sheet_height / 2)
+    return x, y
 
 
 def _op_settings(s: SimpleNamespace, op: str) -> SimpleNamespace:
@@ -872,8 +881,7 @@ class _Program:
 
     def __init__(self, s: SimpleNamespace):
         self.s = s
-        self.origin = {"bottom-left": (0.0, 0.0), "top-left": (0.0, s.sheet_height),
-                       "center": (s.sheet_width / 2, s.sheet_height / 2)}[s.gcode_origin]
+        self.origin = gcode_origin(s)
         self.safe_z = s.gcode_safe_z
         self.plunge_z = min(s.gcode_plunge_z, s.gcode_safe_z)
         self.lines: list[str] = []

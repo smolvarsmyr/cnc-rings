@@ -33,6 +33,10 @@ python3 -m venv .venv
 - Pick a preset, adjust settings, and use **Save preset…** to store the result in `presets.json`, e.g. one preset per species or ring size. **Export** downloads all presets as a file, and **Import…** adds the presets from such a file, for example to copy them to another machine.
 - Click a plate in the preview to skip it for staples, or fill in rows × columns under *Skipped plates*.
 - Scroll to zoom, drag to pan, double-click to fit.
+- **Measure** (or the M key) measures distances on the sheet, for example from a corner to a staple hole:
+  - **Snapping:** the cursor snaps to sheet and plate corners, plate centres, staple hole and slot centres, and slot ends. Away from those, it snaps onto the grid lines and sheet edges. Hold Shift for a free point.
+  - **Measuring:** pointing shows the position as the G-code has it: measured from the G-code origin (X0 Y0, the green square in the preview), with Y up. With the origin top-left, Y is negative on the sheet. Click two points to get the distance, Δx and Δy. Dragging still pans and scrolling still zooms.
+  - **Esc** clears the measurement; Esc again turns the tool off.
 - Download the SVG, DXF or G-code of the sheet on screen, or a zip of all sheets. The zip also contains `*_plates.csv`, which lists the sheet, row and column of each code, and `*_settings.json`.
 
 ## Command line
@@ -149,7 +153,7 @@ The origin (top-left), the 5 mm safe height, the 22.5° ramps and the depths com
 
 In acrylic, melted chips are a sign that the feed is too low for the spindle speed (too little chip load). Raise the feed or lower the speed rather than the other way round.
 
-- **G-code:** settings for the whole machine. These are the safe height for all moves between cuts, the height the tool rapids down to before it slows to the plunge rate, where X0 Y0 is (top-left, bottom-left or centre of the sheet; Z0 is always the top of the material), the ramp angle, the milling direction, the spindle spin-up wait, an optional park position, and the file extension.
+- **G-code:** settings for the whole machine. These are the safe height for all moves between cuts, the height the tool rapids down to before it slows to the plunge rate, where X0 Y0 is (any corner of the sheet or its centre, shown as a green square in the preview; Z0 is always the top of the material), the ramp angle, the milling direction, the spindle spin-up wait, an optional park position, and the file extension.
 - **One group per operation** (staple holes, text, grid lines) with *Export*, a tool number and description, spindle speed, feed and plunge rate, depth and depth per pass. Operations with the same tool number go into the same file. Untick *Export* to leave an operation out. A spindle speed of 0 leaves out the spindle commands, for a router you switch on by hand.
 
 How each operation is cut:

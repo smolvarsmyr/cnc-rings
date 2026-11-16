@@ -77,7 +77,8 @@ def check_file(program, s, ops):
     assert min(end["Z"] for _, _, end in moves) == pytest.approx(-max(o.depth for o in settings))
     xs = [end["X"] for _, _, end in moves if end["X"] is not None]
     ys = [end["Y"] for _, _, end in moves if end["Y"] is not None]
-    origin = {"bottom-left": (0, 0), "top-left": (0, s.sheet_height), "center": (s.sheet_width / 2, s.sheet_height / 2)}
+    origin = {"bottom-left": (0, 0), "bottom-right": (s.sheet_width, 0), "top-left": (0, s.sheet_height),
+              "top-right": (s.sheet_width, s.sheet_height), "center": (s.sheet_width / 2, s.sheet_height / 2)}
     ox, oy = origin[s.gcode_origin]
     assert -ox - 1e-6 <= min(xs) and max(xs) <= s.sheet_width - ox + 1e-6
     assert -oy - 1e-6 <= min(ys) and max(ys) <= s.sheet_height - oy + 1e-6
@@ -92,7 +93,7 @@ def test_one_file_per_tool_in_order():
         check_file(program, job.settings, name.split("_")[2])
 
 
-@pytest.mark.parametrize("origin", ["bottom-left", "top-left", "center"])
+@pytest.mark.parametrize("origin", ["top-left", "top-right", "bottom-left", "bottom-right", "center"])
 def test_origin(origin):
     job = make_job(gcode_origin=origin)
     for name, program in gcode_files(job).items():

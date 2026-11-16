@@ -335,6 +335,7 @@ function renderSheet() {
     overlay.append(rect);
   }
   svg.append(overlay);
+  holder.append(measure.readout);
   applyView();
 }
 
@@ -369,6 +370,19 @@ function fullView() {
 function applyView() {
   const svg = $("#preview svg");
   if (svg) svg.setAttribute("viewBox", (state.view ?? fullView()).join(" "));
+  drawOrigin(); // these marks are sized in screen pixels
+  drawMeasure();
+}
+
+/** A green square where G-code X0 Y0 is. */
+function drawOrigin() {
+  const svg = $("#preview svg");
+  if (!svg) return;
+  svg.querySelector(".origin-mark")?.remove();
+  const { x, y, name } = state.result.origin;
+  const size = 12 * unitsPerPixel();
+  svg.append(svgEl("rect", { class: "origin-mark", x: x - size / 2, y: y - size / 2, width: size, height: size },
+    svgEl("title", {}, `G-code X0 Y0: ${name}`)));
 }
 
 function setupPreview() {
@@ -396,6 +410,7 @@ function setupPreview() {
   });
 
   preview.addEventListener("pointermove", (e) => {
+    if (measure.on && !drag?.moved) hoverMeasure(e);
     if (!drag) return;
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
@@ -412,16 +427,166 @@ function setupPreview() {
     const { moved, target } = drag;
     drag = null;
     preview.classList.remove("panning");
-    if (e.type === "pointerup" && !moved && target.classList?.contains("plate")) {
-      toggleCell(Number(target.dataset.row), Number(target.dataset.col));
-    }
+    if (e.type !== "pointerup" || moved) return;
+    if (measure.on) placeMeasurePoint(e);
+    else if (target.classList?.contains("plate")) toggleCell(Number(target.dataset.row), Number(target.dataset.col));
   };
   preview.addEventListener("pointerup", endDrag);
   preview.addEventListener("pointercancel", endDrag);
+  preview.addEventListener("pointerleave", () => {
+    if (!measure.on) return;
+    measure.hover = null;
+    drawMeasure();
+  });
   preview.addEventListener("dblclick", () => {
+    if (measure.on) return; // two clicks are two measuring points
     state.view = null;
     applyView();
   });
+}
+
+// ---------------------------------------------------------------- measuring
+
+const SNAP_PX = 10; // how close, on screen, the cursor must be to snap
+
+const measure = {
+  on: false,
+  a: null, // first point, { x, y, kind } in preview coordinates (Y down)
+  b: null, // second point; while it is null, the line follows the cursor
+  hover: null,
+  last: null, // last pointer position, to snap again when Shift is pressed or released
+  readout: el("div", { class: "measure-readout", hidden: true }),
+};
+
+const unitsPerPixel = () => 1 / ($("#preview svg")?.getScreenCTM()?.a || 1);
+
+/** The point under the cursor, snapped to the nearest point (corner, hole, plate centre), else to the nearest
+ * line, within SNAP_PX. With free set, exactly where the cursor is. */
+function snapPoint(clientX, clientY, free) {
+  const p = new DOMPoint(clientX, clientY).matrixTransform($("#preview svg").getScreenCTM().inverse());
+  const targets = state.result?.sheets[state.sheet]?.snap;
+  if (free || !targets) return { x: p.x, y: p.y, kind: "free" };
+  let best = null;
+  let bestDistance = SNAP_PX * unitsPerPixel();
+  for (const [x, y, kind] of targets.points) {
+    const d = Math.hypot(x - p.x, y - p.y);
+    if (d <= bestDistance) [best, bestDistance] = [{ x, y, kind }, d];
+  }
+  if (best) return best;
+  for (const [x1, y1, x2, y2] of targets.lines) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const t = Math.min(1, Math.max(0, ((p.x - x1) * dx + (p.y - y1) * dy) / (dx * dx + dy * dy || 1)));
+    const x = x1 + t * dx;
+    const y = y1 + t * dy;
+    const d = Math.hypot(x - p.x, y - p.y);
+    if (d <= bestDistance) [best, bestDistance] = [{ x, y, kind: "on a line" }, d];
+  }
+  return best ?? { x: p.x, y: p.y, kind: "free" };
+}
+
+function hoverMeasure(e) {
+  if (!$("#preview svg")) return;
+  measure.last = { x: e.clientX, y: e.clientY };
+  measure.hover = snapPoint(e.clientX, e.clientY, e.shiftKey);
+  drawMeasure();
+}
+
+function placeMeasurePoint(e) {
+  const p = snapPoint(e.clientX, e.clientY, e.shiftKey);
+  if (!measure.a || measure.b) [measure.a, measure.b] = [p, null];
+  else measure.b = p;
+  drawMeasure();
+}
+
+function setMeasuring(on) {
+  Object.assign(measure, { on, a: null, b: null, hover: null });
+  $("#measure").setAttribute("aria-pressed", String(on));
+  $("#preview").classList.toggle("measuring", on);
+  $("#preview-hint").textContent = on
+    ? "Click two points to measure · snaps to corners, holes and lines · hold Shift for a free point · Esc to clear, Esc again to stop"
+    : "Click a plate to skip it for staples · scroll to zoom · drag to pan · double-click to fit";
+  drawMeasure();
+}
+
+/** The mark for a point: a square on corners, a circle on holes and centres, a diamond on lines, a cross free. */
+function measureMark(p, size, extra = "") {
+  const r = size / 2;
+  const cls = `mark ${extra}`;
+  if (p.kind === "free") return svgEl("path", { class: cls, d: `M${p.x - r},${p.y}h${size}M${p.x},${p.y - r}v${size}` });
+  if (p.kind === "on a line") return svgEl("path", { class: cls, d: `M${p.x},${p.y - r}l${r},${r}l${-r},${r}l${-r},${-r}z` });
+  if (p.kind.includes("corner")) return svgEl("rect", { class: cls, x: p.x - r, y: p.y - r, width: size, height: size });
+  return svgEl("circle", { class: cls, cx: p.x, cy: p.y, r });
+}
+
+function drawMeasure() {
+  const svg = $("#preview svg");
+  if (!svg) return;
+  svg.querySelector(".measure")?.remove();
+  measure.readout.hidden = !measure.on;
+  if (!measure.on) return;
+
+  const px = unitsPerPixel();
+  const g = svgEl("g", { class: "measure" });
+  const { a } = measure;
+  const b = measure.b ?? (a ? measure.hover : null);
+  if (a && b) {
+    g.append(svgEl("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y }));
+    const label = svgEl("text", { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 8 * px, "font-size": 13 * px,
+      "stroke-width": 3 * px, "text-anchor": "middle" }, `${fmt(Math.hypot(b.x - a.x, b.y - a.y))} mm`);
+    g.append(label);
+  }
+  for (const p of [a, measure.b]) if (p) g.append(measureMark(p, 9 * px, "fixed"));
+  if (measure.hover) g.append(measureMark(measure.hover, 13 * px, "hover"));
+  svg.append(g);
+  renderMeasureReadout();
+}
+
+function renderMeasureReadout() {
+  // Positions as the G-code has them: from X0 Y0 (the green square), with Y up.
+  const origin = state.result.origin;
+  const where = (p) => `X ${fmt(p.x - origin.x)}  Y ${fmt(origin.y - p.y)}`;
+  const kind = (p) => (p.kind === "free" ? "" : ` (${p.kind})`);
+  const { a, hover } = measure;
+  const b = measure.b ?? (a ? hover : null);
+  const lines = [];
+  if (a && b) {
+    lines.push(el("div", { class: "distance" }, `${fmt(Math.hypot(b.x - a.x, b.y - a.y))} mm`),
+      el("div", {}, `Δx ${fmt(Math.abs(b.x - a.x))}  Δy ${fmt(Math.abs(b.y - a.y))} mm`),
+      el("div", { class: "muted" }, `From ${where(a)}${kind(a)}`),
+      el("div", { class: "muted" }, `to ${where(b)}${kind(b)}`));
+    if (measure.b && hover) lines.push(el("div", { class: "muted" }, `Pointer ${where(hover)}${kind(hover)}`));
+  } else if (hover) {
+    lines.push(el("div", {}, `${where(hover)} mm${kind(hover)}`),
+      el("div", { class: "muted" }, a ? "" : "Click to start measuring here"));
+  } else {
+    lines.push(el("div", { class: "muted" }, "Point at the sheet to measure"));
+  }
+  lines.push(el("div", { class: "muted origin-note" }, `X0 Y0 = G-code origin, ${origin.name} (green square)`));
+  measure.readout.replaceChildren(...lines);
+}
+
+function setupMeasure() {
+  $("#measure").addEventListener("click", () => setMeasuring(!measure.on));
+  const typing = (e) => e.target.closest("input, textarea, select, [contenteditable]") || $("dialog[open]");
+  document.addEventListener("keydown", (e) => {
+    if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "m" || e.key === "M") {
+      setMeasuring(!measure.on);
+    } else if (e.key === "Escape" && measure.on) {
+      if (measure.a) {
+        [measure.a, measure.b] = [null, null];
+        drawMeasure();
+      } else {
+        setMeasuring(false);
+      }
+    }
+  });
+  const reSnap = (e) => { // Shift pressed or released while the cursor stands still
+    if (e.key === "Shift" && measure.on && measure.last) hoverMeasure({ clientX: measure.last.x, clientY: measure.last.y, shiftKey: e.type === "keydown" });
+  };
+  document.addEventListener("keydown", reSnap);
+  document.addEventListener("keyup", reSnap);
 }
 
 // ---------------------------------------------------------------- CNC share
@@ -651,6 +816,7 @@ async function init() {
     button.addEventListener("click", () => download(button.dataset.download));
   });
   setupPreview();
+  setupMeasure();
   generate();
 }
 

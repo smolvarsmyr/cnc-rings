@@ -121,6 +121,29 @@ def job_from_request() -> tuple[gs.Job, dict]:
     return job, data
 
 
+def snap_targets(job: gs.Job, sheet: gs.Sheet) -> dict:
+    """What the measuring tool in the preview snaps to, in the preview's coordinates (Y down): points with
+    what they are, and lines."""
+    s, g = job.settings, job.grid
+    H = s.sheet_height
+    points: list[tuple[float, float, str]] = [(x, y, "sheet corner") for x in (0, s.sheet_width)
+                                              for y in (0, s.sheet_height)]
+    points.append((s.sheet_width / 2, s.sheet_height / 2, "sheet centre"))
+    points += [(g.x0 + c * g.plate_w, g.y0 + r * g.plate_h, "plate corner")
+               for r in range(g.rows + 1) for c in range(g.cols + 1)]
+    points += [(p.rect[0] + p.rect[2] / 2, p.rect[1] + p.rect[3] / 2, "plate centre") for p in sheet.plates]
+    for shape in sheet.layers.get("STAPLES", []):
+        if isinstance(shape, gs.Circle):
+            points.append((*shape.center, "hole centre"))
+        elif isinstance(shape, gs.Slot):
+            (ax, ay), (bx, by) = shape.a, shape.b
+            points += [((ax + bx) / 2, (ay + by) / 2, "slot centre"), (ax, ay, "slot end"), (bx, by, "slot end")]
+    lines = [(0, 0, s.sheet_width, 0), (s.sheet_width, 0, s.sheet_width, H), (s.sheet_width, H, 0, H), (0, H, 0, 0)]
+    lines += [(*line[0], *line[-1]) for shape in sheet.layers.get("GRID", []) for line in shape.lines]
+    return {"points": [[round(x, 4), round(H - y, 4), kind] for x, y, kind in points],
+            "lines": [[round(x1, 4), round(H - y1, 4), round(x2, 4), round(H - y2, 4)] for x1, y1, x2, y2 in lines]}
+
+
 @app.post("/api/generate")
 def generate():
     job, _ = job_from_request()
@@ -131,9 +154,12 @@ def generate():
                    "x": p.rect[0], "y": height - p.rect[1] - p.rect[3], "w": p.rect[2], "h": p.rect[3]}
                   for p in sheet.plates]
         sheets.append({"number": sheet.number, "svg": gs.sheet_svg(sheet, job.settings, xml_declaration=False),
-                       "plates": plates, "codes": sum(p.code is not None for p in sheet.plates)})
+                       "plates": plates, "codes": sum(p.code is not None for p in sheet.plates),
+                       "snap": snap_targets(job, sheet)})
+    ox, oy = gs.gcode_origin(job.settings)
     return jsonify(sheets=sheets, warnings=job.warnings, stats=job.stats,
                    sheet={"width": job.settings.sheet_width, "height": height},
+                   origin={"x": ox, "y": height - oy, "name": gs.ORIGIN_NAMES[job.settings.gcode_origin]},
                    name=gs.default_name(job.codes))
 
 

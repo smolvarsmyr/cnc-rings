@@ -68,3 +68,14 @@ def test_web_preset_export_import(client):
     assert set(merged) == set(exported) | {"export"}
     assert client.delete("/api/presets/export").status_code == 200
     assert client.post("/api/presets/import", json=["not", "presets"]).status_code == 400
+
+
+def test_preview_snap_targets(client):
+    """The measuring tool snaps to these: they must sit where the drawing has them (preview Y is down)."""
+    settings = gs.load_presets(gs.DEFAULT_PRESETS_FILE)["PL series 40x115 (photo)"]
+    sheet = client.post("/api/generate", json={"settings": settings, "codes": "PL37"}).get_json()["sheets"][0]
+    points = {(x, y): kind for x, y, kind in sheet["snap"]["points"]}
+    assert points[(0, 0)] == "sheet corner" and points[(20, 600 - 12.5)] == "plate corner"
+    assert points[(50, 600 - 6.25)] == "hole centre"  # first staple on the bottom edge
+    assert points[(40, 600 - 12.5 - 57.5)] == "plate centre"
+    assert [20, 600 - 12.5, 580, 600 - 12.5] in sheet["snap"]["lines"]  # bottom grid line
