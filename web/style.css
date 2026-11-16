@@ -181,6 +181,33 @@ details.group > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 
 .stats { font-size: 12px; color: var(--muted); }
 
+.measure-toggle { margin-left: auto; }
+.measure-toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.preview.measuring svg { cursor: crosshair; }
+.preview.measuring .plate { pointer-events: none; }
+/* The preview is always a dark sheet, so these colours do not change with the theme. */
+.preview .measure line { stroke: #ff5ad1; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.preview .measure .mark { fill: none; stroke: #ff5ad1; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.preview .measure .mark.hover { stroke: #ffffff; }
+.preview .measure text { fill: #ffffff; stroke: #000000; paint-order: stroke; font-family: system-ui, sans-serif; }
+.measure-readout {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  max-width: calc(100% - 20px);
+  padding: 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+  pointer-events: none;
+}
+.measure-readout .distance { font-size: 15px; font-weight: 600; }
+.measure-readout .origin-note { margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border); }
+.preview .origin-mark { fill: #22c55e; stroke: #052e14; stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+
 .send { display: inline-flex; gap: 6px; padding-left: 8px; border-left: 1px solid var(--border); }
 .message.ok { background: var(--ok-bg); border-color: var(--ok-border); }
 .queue-badge { background: var(--warn-bg); border-color: var(--warn-border); font-size: 12px; }
