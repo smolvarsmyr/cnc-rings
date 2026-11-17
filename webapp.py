@@ -100,11 +100,23 @@ def name_from_request(job: gs.Job, data: dict) -> str:
     return gs.safe_name(raw_name) if raw_name else gs.default_name(job.codes)
 
 
+def plates_from_request(job: gs.Job, data: dict) -> set[tuple[int, int]] | None:
+    """The plates picked in the preview's selection mode as (row, column), or None outside that mode."""
+    if data.get("plates") is None:
+        return None
+    try:
+        plates = {(int(row), int(col)) for row, col in data["plates"]}
+    except (TypeError, ValueError):
+        raise ValueError("plates: expected a list of [row, column] pairs") from None
+    return {(r, c) for r, c in plates if 1 <= r <= job.grid.rows and 1 <= c <= job.grid.cols}
+
+
 def sheet_files_from_request(job: gs.Job, data: dict, name: str, fmt: str) -> tuple[int, dict[str, bytes]]:
     number = int(data.get("sheet") or 1)
     if not 1 <= number <= len(job.sheets):
         raise ValueError(f"There is no sheet {number}")
-    files = gs.sheet_files(job, job.sheets[number - 1], name, {fmt})
+    plates = plates_from_request(job, data) if fmt == "gcode" else None
+    files = gs.sheet_files(job, job.sheets[number - 1], name, {fmt}, plates)
     if not files and fmt == "gcode":
         raise ValueError("There is no G-code to export: tick Export for at least one of the G-code operations")
     return number, files
@@ -176,7 +188,8 @@ def download():
         if len(files) == 1:
             filename, payload = next(iter(files.items()))
         else:  # one G-code file per tool
-            payload, filename, fmt = gs.zip_files(files), f"{name}_sheet{number:02d}_gcode.zip", "zip"
+            selected = "_selected" if data.get("plates") is not None else ""
+            payload, filename, fmt = gs.zip_files(files), f"{name}_sheet{number:02d}_gcode{selected}.zip", "zip"
     else:
         raise ValueError(f"Unknown format '{fmt}'")
     return Response(payload, mimetype=MIME[fmt], headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -212,7 +225,7 @@ def send_smb():
     job, data = job_from_request()
     name = name_from_request(job, data)
     number, files = sheet_files_from_request(job, data, name, "gcode")
-    job_id = send_queue.enqueue(files, f"{name} sheet {number}")
+    job_id = send_queue.enqueue(files, f"{name} sheet {number}" + (" (selected plates)" if data.get("plates") is not None else ""))
     send_queue.deliver(manual=True)
     waiting = next((j for j in send_queue.jobs() if j["id"] == job_id), None)
     if waiting is None:

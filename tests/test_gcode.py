@@ -210,3 +210,44 @@ def test_text_free_order_is_the_shortest_way():
     _, visits = text_plates("free")
     rows = [row for row, _ in visits]
     assert rows != sorted(rows)
+
+
+def test_selected_plates_only():
+    job = make_job(gcode_origin="bottom-left")
+    picked = {(1, 1), (1, 2), (3, 5)}
+    files = gs.sheet_gcode(job, job.sheets[0], "t", "test", picked)
+    assert list(files) == ["t_2_text+grid_T2_selected.ngc"]  # no staple holes; numbered as in the full export
+    program = files["t_2_text+grid_T2_selected.ngc"].decode()
+    codes = {(p.row, p.col): p.code for p in job.sheets[0].plates}
+    assert f"(Plates: {codes[1, 1]} [1:1], {codes[1, 2]} [1:2], {codes[3, 5]} [3:5])" in program
+    rects = [job.grid.plate_rect(row, col) for row, col in picked]
+    cuts = [(end["X"], end["Y"]) for code, _, end in check_file(program, job.settings, "text+grid") if code and end["Z"] < 0]
+    assert all(any(x0 - 1e-6 <= x <= x0 + w + 1e-6 and y0 - 1e-6 <= y <= y0 + h + 1e-6 for x0, y0, w, h in rects)
+               for x, y in cuts)  # nothing outside the picked plates
+    for x0, y0, w, h in rects:  # and the text of each of them
+        assert any(x0 + 1 < x < x0 + w - 1 and y0 + 1 < y < y0 + h - 1 for x, y in cuts)
+
+
+def test_plate_edges_are_cut_once():
+    grid = make_job().grid
+    edges = gs.plate_edges(grid, {(1, 1), (1, 2)})  # two plates side by side
+    assert len(edges) == 5  # bottom and top joined across both, three uprights
+
+
+def test_selected_needs_plates_and_keeps_numbering():
+    job = make_job(gcode_staples_tool=2)  # staples, text and grid all in one file
+    assert list(gs.sheet_gcode(job, job.sheets[0], "t", "test", {(1, 1)})) == ["t_1_text+grid_T2_selected.ngc"]
+    with pytest.raises(ValueError, match="Select at least one plate"):
+        gs.sheet_gcode(job, job.sheets[0], "t", "test", set())
+
+
+def test_web_selected_download():
+    client = webapp.app.test_client()
+    settings = gs.load_presets(gs.DEFAULT_PRESETS_FILE)[PRESET]
+    body = {"settings": settings, "codes": "PL37..PL40", "format": "gcode", "plates": [[1, 1], [1, 2]]}
+    response = client.post("/api/download", json=body)
+    assert response.headers["Content-Disposition"] == 'attachment; filename="PL37-PL40_sheet01_2_text+grid_T2_selected.ngc"'
+    assert client.post("/api/download", json={**body, "plates": "nonsense"}).status_code == 400
+    assert client.post("/api/download", json={**body, "plates": []}).status_code == 400
+    full = client.post("/api/download", json={**body, "plates": None})
+    assert full.data[:2] == b"PK"  # without plates: the whole sheet, staple holes too

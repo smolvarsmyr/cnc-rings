@@ -65,7 +65,16 @@
         <span><i class="swatch staples"></i>STAPLES</span>
         <span><i class="swatch sheet"></i>SHEET</span>
         <span id="preview-hint" class="muted">Click a plate to skip it for staples · scroll to zoom · drag to pan · double-click to fit</span>
-        <button type="button" id="measure" class="measure-toggle" aria-pressed="false" title="Measure distances on the sheet (M)">Measure</button>
+        <span id="selection-bar" class="selection-bar" hidden>
+          <b id="selection-count"></b>
+          <button type="button" id="select-all">Select all</button>
+          <button type="button" id="select-none">Select none</button>
+          <span class="muted">Click rings to pick them, or drag a box over a block: it picks them, or drops them when they are all picked already (Shift: always drop); right-drag pans. G-code, View G-code and Send to CNC now cover only their text and outlines (…_selected.ngc); no staple holes.</span>
+        </span>
+        <span class="preview-modes">
+          <button type="button" id="select-mode" class="mode-toggle" aria-pressed="false" title="Make G-code for some of the rings only">Select plates</button>
+          <button type="button" id="measure" class="mode-toggle" aria-pressed="false" title="Measure distances on the sheet (M)">Measure</button>
+        </span>
       </div>
       <div id="stats" class="stats"></div>
     </section>

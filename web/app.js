@@ -327,7 +327,8 @@ function renderSheet() {
   const overlay = svgEl("g", { class: "overlay" });
   for (const p of data.plates) {
     const rect = svgEl("rect", {
-      class: ["plate", p.skipped && "skipped", !p.code && "empty"].filter(Boolean).join(" "),
+      class: ["plate", p.skipped && "skipped", !p.code && "empty", p.code && "has-code",
+        selection.plates.has(`${p.row}:${p.col}`) && "selected"].filter(Boolean).join(" "),
       x: p.x, y: p.y, width: p.w, height: p.h, "data-row": p.row, "data-col": p.col,
     });
     const what = p.skipped ? "skipped for staples" : p.code ?? "empty";
@@ -337,6 +338,7 @@ function renderSheet() {
   svg.append(overlay);
   holder.append(measure.readout);
   applyView();
+  renderPlateSelection();
 }
 
 function renderStats() {
@@ -403,10 +405,15 @@ function setupPreview() {
 
   preview.addEventListener("pointerdown", (e) => {
     const svg = preview.querySelector("svg");
-    if (!svg || e.button !== 0) return;
+    // Left button; while selecting plates, where left-drag draws a box, the right and middle buttons pan.
+    if (!svg || (e.button !== 0 && !(selection.on && (e.button === 1 || e.button === 2)))) return;
+    if (e.button === 1) e.preventDefault(); // no autoscroll
     drag = { x: e.clientX, y: e.clientY, view: state.view ?? fullView(), moved: false,
-      unit: 1 / svg.getScreenCTM().a, target: e.target };
+      unit: 1 / svg.getScreenCTM().a, target: e.target, box: selection.on && e.button === 0 };
     preview.setPointerCapture(e.pointerId);
+  });
+  preview.addEventListener("contextmenu", (e) => {
+    if (selection.on) e.preventDefault();
   });
 
   preview.addEventListener("pointermove", (e) => {
@@ -416,6 +423,10 @@ function setupPreview() {
     const dy = e.clientY - drag.y;
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
     drag.moved = true;
+    if (drag.box) {
+      dragSelectBox(drag, e);
+      return;
+    }
     preview.classList.add("panning");
     const [x, y, w, h] = drag.view;
     state.view = [x - dx * drag.unit, y - dy * drag.unit, w, h];
@@ -424,12 +435,18 @@ function setupPreview() {
 
   const endDrag = (e) => {
     if (!drag) return;
-    const { moved, target } = drag;
+    const { moved, target, box } = drag;
     drag = null;
     preview.classList.remove("panning");
+    if (box && moved) {
+      finishSelectBox(e.type === "pointerup");
+      return;
+    }
     if (e.type !== "pointerup" || moved) return;
     if (measure.on) placeMeasurePoint(e);
-    else if (target.classList?.contains("plate")) toggleCell(Number(target.dataset.row), Number(target.dataset.col));
+    else if (!target.classList?.contains("plate")) return;
+    else if (selection.on) toggleSelected(target);
+    else toggleCell(Number(target.dataset.row), Number(target.dataset.col));
   };
   preview.addEventListener("pointerup", endDrag);
   preview.addEventListener("pointercancel", endDrag);
@@ -442,6 +459,109 @@ function setupPreview() {
     if (measure.on) return; // two clicks are two measuring points
     state.view = null;
     applyView();
+  });
+}
+
+// ---------------------------------------------------------------- selecting plates
+
+// In this mode the G-code of the sheet on screen covers only the picked rings (row:column), without staple holes.
+const selection = { on: false, plates: new Set(), box: null };
+
+const platesWithCode = () => state.result?.sheets[state.sheet]?.plates.filter((p) => p.code) ?? [];
+
+/** The request for G-code of the sheet on screen, with the picked rings while selecting. */
+function gcodePayload(extra = {}) {
+  const plates = selection.on
+    ? platesWithCode().filter((p) => selection.plates.has(`${p.row}:${p.col}`)).map((p) => [p.row, p.col])
+    : undefined;
+  return payload({ sheet: state.sheet + 1, plates, ...extra });
+}
+
+function renderPlateSelection() {
+  const total = platesWithCode().length;
+  const picked = platesWithCode().filter((p) => selection.plates.has(`${p.row}:${p.col}`)).length;
+  $("#selection-count").textContent = `${picked} of ${total} rings selected`;
+  $("#preview").classList.toggle("selecting", selection.on);
+  $(".downloads").classList.toggle("selection-active", selection.on);
+  $("#selection-bar").hidden = !selection.on;
+  $("#preview-hint").hidden = selection.on;
+  $("#select-mode").setAttribute("aria-pressed", String(selection.on));
+  document.querySelectorAll("#preview .plate").forEach((rect) => {
+    rect.classList.toggle("selected", selection.plates.has(`${rect.dataset.row}:${rect.dataset.col}`));
+  });
+}
+
+function setSelecting(on) {
+  if (on && measure.on) setMeasuring(false);
+  selection.on = on;
+  renderPlateSelection();
+}
+
+function toggleSelected(rect) {
+  if (!rect.classList.contains("has-code")) return; // no ring there
+  const key = `${rect.dataset.row}:${rect.dataset.col}`;
+  if (!selection.plates.delete(key)) selection.plates.add(key);
+  renderPlateSelection();
+}
+
+/** Rings a dragged box touches, as row:column keys. */
+function platesInBox(x0, y0, x1, y1) {
+  const [left, right] = [Math.min(x0, x1), Math.max(x0, x1)];
+  const [top, bottom] = [Math.min(y0, y1), Math.max(y0, y1)];
+  return platesWithCode()
+    .filter((p) => p.x < right && p.x + p.w > left && p.y < bottom && p.y + p.h > top)
+    .map((p) => `${p.row}:${p.col}`);
+}
+
+/** While dragging in selection mode: draw the box and mark the rings it will change. It drops them when they
+ * are all picked already (or Shift is held), and picks them otherwise. */
+function dragSelectBox(drag, e) {
+  const svg = $("#preview svg");
+  const toSvg = (x, y) => new DOMPoint(x, y).matrixTransform(svg.getScreenCTM().inverse());
+  drag.start ??= toSvg(drag.x, drag.y);
+  const end = toSvg(e.clientX, e.clientY);
+  const keys = platesInBox(drag.start.x, drag.start.y, end.x, end.y);
+  drag.remove = e.shiftKey || (keys.length > 0 && keys.every((key) => selection.plates.has(key)));
+  let rect = svg.querySelector(".select-box");
+  if (!rect) {
+    rect = svgEl("rect", { class: "select-box" });
+    svg.append(rect);
+  }
+  rect.classList.toggle("remove", drag.remove);
+  rect.setAttribute("x", Math.min(drag.start.x, end.x));
+  rect.setAttribute("y", Math.min(drag.start.y, end.y));
+  rect.setAttribute("width", Math.abs(end.x - drag.start.x));
+  rect.setAttribute("height", Math.abs(end.y - drag.start.y));
+  selection.box = { keys: new Set(keys), remove: drag.remove };
+  document.querySelectorAll("#preview .plate").forEach((plate) => {
+    const inside = selection.box.keys.has(`${plate.dataset.row}:${plate.dataset.col}`);
+    plate.classList.toggle("box-add", inside && !drag.remove);
+    plate.classList.toggle("box-remove", inside && drag.remove);
+  });
+}
+
+function finishSelectBox(apply) {
+  if (apply && selection.box) {
+    for (const key of selection.box.keys) {
+      if (selection.box.remove) selection.plates.delete(key);
+      else selection.plates.add(key);
+    }
+  }
+  selection.box = null;
+  $("#preview .select-box")?.remove();
+  document.querySelectorAll("#preview .plate").forEach((plate) => plate.classList.remove("box-add", "box-remove"));
+  renderPlateSelection();
+}
+
+function setupSelection() {
+  $("#select-mode").addEventListener("click", () => setSelecting(!selection.on));
+  $("#select-all").addEventListener("click", () => {
+    selection.plates = new Set(platesWithCode().map((p) => `${p.row}:${p.col}`));
+    renderPlateSelection();
+  });
+  $("#select-none").addEventListener("click", () => {
+    selection.plates.clear();
+    renderPlateSelection();
   });
 }
 
@@ -500,6 +620,7 @@ function placeMeasurePoint(e) {
 }
 
 function setMeasuring(on) {
+  if (on && selection.on) setSelecting(false);
   Object.assign(measure, { on, a: null, b: null, hover: null });
   $("#measure").setAttribute("aria-pressed", String(on));
   $("#preview").classList.toggle("measuring", on);
@@ -573,6 +694,8 @@ function setupMeasure() {
     if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "m" || e.key === "M") {
       setMeasuring(!measure.on);
+    } else if (e.key === "Escape" && selection.on && !measure.on) {
+      setSelecting(false);
     } else if (e.key === "Escape" && measure.on) {
       if (measure.a) {
         [measure.a, measure.b] = [null, null];
@@ -690,7 +813,7 @@ async function sendQueue(button) {
 
 async function viewSheetGcode() {
   try {
-    const sheet = await getJSON("/api/gcode", { method: "POST", body: payload({ sheet: state.sheet + 1 }) });
+    const sheet = await getJSON("/api/gcode", { method: "POST", body: gcodePayload() });
     openGcodeViewer(Object.entries(sheet.files).map(([name, text]) => ({ name, load: async () => text })));
   } catch (err) {
     showMessages(state.result?.warnings ?? [], err.message);
@@ -924,7 +1047,7 @@ async function sendToCnc() {
     }
     button.disabled = true;
     button.textContent = "Sending…";
-    const result = await getJSON("/api/smb/send", { method: "POST", body: payload({ sheet: state.sheet + 1 }) });
+    const result = await getJSON("/api/smb/send", { method: "POST", body: gcodePayload() });
     if (result.sent) {
       showNotice(`Sent ${result.sent.length} file${result.sent.length === 1 ? "" : "s"}: ${result.sent.join(", ")}`);
     } else {
@@ -948,7 +1071,7 @@ async function sendToCnc() {
 async function download(format) {
   try {
     const response = await api("/api/download", {
-      method: "POST", body: payload({ format, sheet: state.sheet + 1, dwg: state.schema.dwg }),
+      method: "POST", body: gcodePayload({ format, dwg: state.schema.dwg }), // the server uses plates for G-code only
     });
     const blob = await response.blob();
     const match = /filename="([^"]+)"/.exec(response.headers.get("Content-Disposition") || "");
@@ -1047,6 +1170,7 @@ async function init() {
   });
   setupPreview();
   setupMeasure();
+  setupSelection();
   generate();
 }
 

@@ -181,8 +181,22 @@ details.group > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 
 .stats { font-size: 12px; color: var(--muted); }
 
-.measure-toggle { margin-left: auto; }
-.measure-toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.preview-modes { margin-left: auto; display: flex; gap: 6px; }
+.mode-toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.selection-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.selection-bar[hidden] { display: none; }
+.selection-bar b { color: #16a34a; }
+/* Selection mode: picked rings in green, the others dimmed; the G-code actions it changes are outlined green. */
+.preview.selecting .plate { cursor: default; }
+.preview.selecting .plate.has-code { cursor: pointer; }
+.preview.selecting .plate.has-code:not(.selected) { fill: rgba(0, 0, 0, .45); }
+.preview.selecting .plate.selected { fill: rgba(34, 197, 94, .22); stroke: #22c55e; stroke-width: 1.5; }
+.selection-active :is([data-download="gcode"], #view-gcode, #smb-send) { outline: 2px solid #22c55e; outline-offset: 1px; }
+.preview.selecting svg { cursor: crosshair; }
+.preview .select-box { fill: rgba(34, 197, 94, .12); stroke: #22c55e; stroke-width: 1.5; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; pointer-events: none; }
+.preview .select-box.remove { fill: rgba(248, 113, 113, .12); stroke: #f87171; }
+.preview.selecting .plate.has-code.box-add { fill: rgba(34, 197, 94, .4); }
+.preview.selecting .plate.has-code.box-remove { fill: rgba(248, 113, 113, .35); stroke: #f87171; }
 .preview.measuring svg { cursor: crosshair; }
 .preview.measuring .plate { pointer-events: none; }
 /* The preview is always a dark sheet, so these colours do not change with the theme. */
