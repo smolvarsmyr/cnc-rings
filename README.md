@@ -165,6 +165,17 @@ How each operation is cut:
 
 The files use only common G-code (G0/G1/G2/G3, M3/M5, G4, M30, comments in parentheses), which runs on GRBL, LinuxCNC, Mach3/4 and UCCNC. The header gives the estimated cutting time. **Check new settings in a simulator such as [NC Viewer](https://ncviewer.com) or with an air cut before cutting a sheet.**
 
+### G-code for some of the rings
+
+To engrave some rings again (one that went wrong, or a few codes from an earlier sheet), turn on **Select plates** under the preview:
+
+- **Picking rings:** click a ring to pick it or drop it, or use **Select all** and **Select none**. Drag a box over a block of rings to pick them. If every ring in the box is picked already, the box drops them instead, so after **Select all** you can drag out the rings you don't want. Holding Shift while dragging always drops. While you drag, green shows rings that will be picked and red rings that will be dropped. In this mode, right- or middle-drag pans. Picked rings are green. Skipped and empty plates have no ring and can't be picked. Esc, or the button again, leaves the mode.
+- **What it changes:** while the mode is on, **G-code**, **View G-code** and **Send to CNC** cover only the picked rings of the sheet on screen.
+  - **Contents:** their text, and their plate outlines instead of the whole grid. An edge two picked rings share is cut once, and edges in a line are joined into one cut.
+  - **Staple holes** are left out, because they are already drilled.
+  - **File names** are those of the full export with `_selected` added, e.g. `PL37-PM02_sheet01_2_text+grid_T2_selected.ngc`. The header of each file lists the rings it contains.
+- **All sheets (.zip)** always contains the full sheets.
+
 ### Viewing G-code
 
 **View G-code** (next to the downloads) opens the G-code of the sheet on screen in a viewer, so you can check it before sending. The same viewer opens files on the CNC share and files waiting in the queue:

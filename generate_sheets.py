@@ -33,6 +33,7 @@ import re
 import string
 import sys
 import tempfile
+import textwrap
 import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
@@ -794,7 +795,8 @@ def default_name(codes: list[str]) -> str:
     return safe_name(codes[0] if len(codes) == 1 else f"{codes[0]}-{codes[-1]}")
 
 
-def sheet_files(job: Job, sheet: Sheet, name: str, formats: set[str]) -> dict[str, bytes]:
+def sheet_files(job: Job, sheet: Sheet, name: str, formats: set[str],
+                plates: set[tuple[int, int]] | None = None) -> dict[str, bytes]:
     stem = f"{name}_sheet{sheet.number:02d}"
     title = f"{name} - sheet {sheet.number} of {len(job.sheets)}"
     files = {}
@@ -807,7 +809,7 @@ def sheet_files(job: Job, sheet: Sheet, name: str, formats: set[str]) -> dict[st
         if "dwg" in formats:
             files[f"{stem}.dwg"] = dwg_bytes(doc)
     if "gcode" in formats:
-        files.update(sheet_gcode(job, sheet, stem, title))
+        files.update(sheet_gcode(job, sheet, stem, title, plates))
     return files
 
 
@@ -987,6 +989,47 @@ def _nearest_first(shapes: list[Shape], g: _Program):
         yield shapes[i]
 
 
+def _plate_of(grid: Grid, shape: Shape) -> tuple[int, int]:
+    """(row, column) of the plate the middle of a shape is in, e.g. one copy of a code."""
+    x0, y0, x1, y1 = shape_bbox(shape)
+    col = min(grid.cols, max(1, int(((x0 + x1) / 2 - grid.x0) // grid.plate_w) + 1))
+    row = min(grid.rows, max(1, int(((y0 + y1) / 2 - grid.y0) // grid.plate_h) + 1))
+    return row, col
+
+
+def plate_edges(grid: Grid, plates: set[tuple[int, int]]) -> list[Shape]:
+    """The outlines of some plates as straight lines: an edge two of them share is cut once, and edges that
+    continue each other are joined into one line."""
+    across: dict[int, set[int]] = {}  # horizontal line number (0 = bottom of the grid) -> columns along it
+    up: dict[int, set[int]] = {}  # vertical line number (0 = left of the grid) -> rows along it
+    for row, col in plates:
+        for line in (row - 1, row):
+            across.setdefault(line, set()).add(col)
+        for line in (col - 1, col):
+            up.setdefault(line, set()).add(row)
+
+    def runs(cells: set[int]) -> list[list[int]]:
+        """Numbers that follow each other, as [first, last]."""
+        out: list[list[int]] = []
+        for cell in sorted(cells):
+            if out and cell == out[-1][1] + 1:
+                out[-1][1] = cell
+            else:
+                out.append([cell, cell])
+        return out
+
+    lines: list[Shape] = []
+    for line, cols in sorted(across.items()):
+        y = grid.y0 + line * grid.plate_h
+        for a, b in runs(cols):
+            lines.append(Polylines([[(grid.x0 + (a - 1) * grid.plate_w, y), (grid.x0 + b * grid.plate_w, y)]]))
+    for line, rows in sorted(up.items()):
+        x = grid.x0 + line * grid.plate_w
+        for a, b in runs(rows):
+            lines.append(Polylines([[(x, grid.y0 + (a - 1) * grid.plate_h), (x, grid.y0 + b * grid.plate_h)]]))
+    return lines
+
+
 def _text_in_order(job: Job, shapes: list[Shape], g: _Program):
     """The engraved codes in the order set by gcode_text_order. Each shape is one copy of a code; the plate it
     belongs to is the one its middle is in."""
@@ -994,12 +1037,9 @@ def _text_in_order(job: Job, shapes: list[Shape], g: _Program):
     if order == "free":
         yield from _nearest_first(shapes, g)
         return
-    grid = job.grid
     rows: dict[int, dict[int, list[Shape]]] = {}
     for shape in shapes:
-        x0, y0, x1, y1 = shape_bbox(shape)
-        col = min(grid.cols, max(1, int(((x0 + x1) / 2 - grid.x0) // grid.plate_w) + 1))
-        row = min(grid.rows, max(1, int(((y0 + y1) / 2 - grid.y0) // grid.plate_h) + 1))
+        row, col = _plate_of(job.grid, shape)
         rows.setdefault(row, {}).setdefault(col, []).append(shape)
     for i, row in enumerate(sorted(rows)):  # bottom row first
         if order == "row by row":
@@ -1169,19 +1209,41 @@ def _gcode_program(job: Job, sheet: Sheet, title: str, tool: int, ops: list[tupl
     return "\n".join(head + g.lines) + "\n"
 
 
-def sheet_gcode(job: Job, sheet: Sheet, stem: str, title: str) -> dict[str, bytes]:
-    """One file per tool, in the order of GCODE_OPS; operations sharing a tool number share a file."""
+def sheet_gcode(job: Job, sheet: Sheet, stem: str, title: str,
+                plates: set[tuple[int, int]] | None = None) -> dict[str, bytes]:
+    """One file per tool, in the order of GCODE_OPS; operations sharing a tool number share a file.
+
+    With plates, only the text and the plate outlines of those plates (row, column), for engraving some rings
+    again: the staple holes are left out, and the files are named as the full ones with _selected added."""
     s = job.settings
     groups: dict[int, list[tuple[str, str, str]]] = {}
     for op, layer, label in GCODE_OPS:
         if getattr(s, f"gcode_{op}_enabled") and sheet.layers.get(layer):
             groups.setdefault(getattr(s, f"gcode_{op}_tool"), []).append((op, layer, label))
+    suffix = ""
+    if plates is not None:
+        if not plates:
+            raise ValueError("Select at least one plate to make G-code for")
+        sheet = Sheet(sheet.number, sheet.plates, {
+            "TEXT": [shape for shape in sheet.layers.get("TEXT", []) if _plate_of(job.grid, shape) in plates],
+            "GRID": plate_edges(job.grid, plates),
+        })
+        codes = [f"{p.code} ({p.row}:{p.col})" for p in sheet.plates if (p.row, p.col) in plates and p.code]
+        title += f": {len(plates)} selected plate{'s' if len(plates) > 1 else ''}"
+        suffix = "_selected"
     files = {}
-    for number, (tool, ops) in enumerate(groups.items(), 1):
+    for number, (tool, ops) in enumerate(groups.items(), 1):  # numbered as in the full export
+        ops = [o for o in ops if sheet.layers.get(o[1])]
+        if not ops:
+            continue
         what = "+".join(op for op, _, _ in ops)
         label = " and ".join(label for _, _, label in ops)
         program = _gcode_program(job, sheet, f"{title}: {label}", tool, ops)
-        files[f"{stem}_{number}_{what}_T{tool}.{s.gcode_extension}"] = program.encode("ascii")
+        if plates is not None:  # which rings these are, in comment lines short enough for any controller
+            listed = textwrap.wrap(", ".join(codes) or "none", 60)
+            program = "\n".join([program.split("\n", 1)[0], *(_gcode_comment(f"Plates: {line}") for line in listed),
+                                 program.split("\n", 1)[1]])
+        files[f"{stem}_{number}_{what}_T{tool}{suffix}.{s.gcode_extension}"] = program.encode("ascii")
     return files
 
 
