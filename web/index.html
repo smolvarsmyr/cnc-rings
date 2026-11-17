@@ -46,10 +46,13 @@
           <button type="button" data-download="dxf">DXF</button>
           <button type="button" data-download="dwg" hidden>DWG</button>
           <button type="button" data-download="gcode" title="One file per tool (a .zip when there is more than one)">G-code</button>
+          <button type="button" id="view-gcode" title="Show and simulate the G-code of this sheet">View G-code</button>
           <button type="button" data-download="zip" class="primary">All sheets (.zip)</button>
           <span class="send">
             <button type="button" id="smb-send" title="Copy the G-code of this sheet to the CNC share">Send to CNC</button>
-            <button type="button" id="queue-badge" class="queue-badge" title="Waiting for the CNC share to come online" hidden></button>
+            <button type="button" id="queue-badge" class="queue-badge" title="Show what is waiting for the CNC share" hidden></button>
+            <button type="button" id="queue-send-now" class="queue-badge" title="Try to send the queue to the CNC share now" hidden>Send now</button>
+            <button type="button" id="files-open" title="Browse, view and manage the files on the CNC share">CNC files</button>
             <button type="button" id="smb-open" class="quiet" title="Where Send to CNC copies the files">CNC share…</button>
           </span>
         </div>
@@ -100,12 +103,6 @@
         <span class="control"><input id="smb-port" name="port" type="number" min="1" max="65535" step="1" placeholder="445"></span>
       </div>
       <div id="smb-result" class="smb-result" hidden></div>
-      <section id="queue" class="queue" hidden>
-        <h3>Waiting to be sent</h3>
-        <ul id="queue-list"></ul>
-        <p id="queue-info" class="help"></p>
-        <button type="button" id="queue-send">Send now</button>
-      </section>
       <div class="dialog-buttons">
         <button type="button" id="smb-test">Test connection</button>
         <span class="spacer"></span>
@@ -115,6 +112,87 @@
     </form>
   </dialog>
 
+  <dialog id="queue-dialog" class="queue-dialog">
+    <h2>Waiting for the CNC share</h2>
+    <p class="help">Sends that could not reach the share yet. They go out by themselves when it answers, or press Send now.</p>
+    <ul id="queue-list" class="queue-list"></ul>
+    <p id="queue-info" class="help"></p>
+    <div id="queue-result" class="message" hidden></div>
+    <div class="dialog-buttons">
+      <button type="button" id="queue-send" class="primary">Send now</button>
+      <span class="spacer"></span>
+      <button type="button" class="quiet" data-close>Close</button>
+    </div>
+  </dialog>
+
+  <dialog id="files-dialog" class="files-dialog">
+    <div class="files-head">
+      <h2>CNC files</h2>
+      <nav id="files-crumbs" class="crumbs" aria-label="Folder"></nav>
+      <span class="spacer"></span>
+      <button type="button" id="files-up" title="Up one folder">Up</button>
+      <button type="button" id="files-new-folder">New folder</button>
+      <button type="button" id="files-refresh">Refresh</button>
+    </div>
+    <div id="files-message" class="message" hidden></div>
+    <div class="files-table-wrap">
+      <table class="files-table">
+        <thead><tr><th class="check"><input type="checkbox" id="files-all" title="Select all"></th><th>Name</th><th class="num">Size</th><th>Changed</th><th></th></tr></thead>
+        <tbody id="files-list"></tbody>
+      </table>
+    </div>
+    <div class="dialog-buttons">
+      <span id="files-selected" class="muted"></span>
+      <button type="button" id="files-move" disabled>Move to…</button>
+      <button type="button" id="files-delete" disabled>Delete</button>
+      <span class="spacer"></span>
+      <span class="muted">Drag files onto a folder to move them there</span>
+      <button type="button" class="quiet" data-close>Close</button>
+    </div>
+  </dialog>
+
+  <dialog id="viewer" class="viewer">
+    <div class="viewer-head">
+      <h2>G-code viewer</h2>
+      <div class="viewer-tabs tabs"></div>
+      <span class="spacer"></span>
+      <button type="button" class="viewer-close">Close</button>
+    </div>
+    <div class="viewer-body">
+      <div class="viewer-stage">
+        <canvas></canvas>
+        <div class="viewer-status" hidden></div>
+      </div>
+      <aside class="viewer-side">
+        <div class="viewer-views">
+          <button type="button" data-view="top" class="active">Top</button>
+          <button type="button" data-view="3d">3D</button>
+          <button type="button" data-view="fit">Fit</button>
+        </div>
+        <div class="viewer-controls">
+          <button type="button" class="viewer-prev" title="Previous line (←)">◀</button>
+          <button type="button" class="viewer-play primary" title="Play or pause (Space)">Play</button>
+          <button type="button" class="viewer-next" title="Next line (→)">▶</button>
+          <select class="viewer-speed" title="Simulation speed">
+            <option value="1">1×</option><option value="5">5×</option><option value="20" selected>20×</option>
+            <option value="100">100×</option><option value="500">500×</option>
+          </select>
+        </div>
+        <input type="range" class="viewer-slider" min="0" max="10000" value="10000" aria-label="Simulation position">
+        <div class="viewer-time"></div>
+        <div class="viewer-info"></div>
+        <div class="viewer-code"></div>
+        <div class="viewer-legend">
+          <span><i class="cut"></i>cut, lighter = shallower</span>
+          <span><i class="rapid"></i>rapid move (G0)</span>
+          <span><i class="origin"></i>X0 Y0</span>
+        </div>
+        <p class="help">Drag to pan (3D: to turn, Shift-drag to pan) · scroll to zoom · double-click to fit. Times use the feeds in the file, rapids at 3000 mm/min.</p>
+      </aside>
+    </div>
+  </dialog>
+
+  <script src="/static/viewer.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

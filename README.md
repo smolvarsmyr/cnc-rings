@@ -159,10 +159,27 @@ In acrylic, melted chips are a sign that the feed is too low for the spindle spe
 How each operation is cut:
 
 - **Text and grid lines** are followed on the line. Each line ramps in along its first segment, and with several passes it goes back and forth without lifting.
+- **Text order** (*Order* under *G-code: text*): **plate by plate** (the default) finishes one plate, so one ring, before starting the next. **Row by row** engraves one row of plates at a time. Both start at the bottom row and work up, going back and forth along the rows. **Free** takes the shortest way over the whole sheet.
 - **Staple holes** as wide as the tool are drilled with pecks. Slots as wide as the tool are cut along their length. Wider holes are milled out from the middle to the edge, with a helix into round holes and a ramp into slots. The *Tool diameter* setting decides which method is used. A warning appears if the tool is wider than a hole.
 - The tool never goes down faster than the plunge rate, also on ramps and helixes. All moves between cuts are at the safe height.
 
 The files use only common G-code (G0/G1/G2/G3, M3/M5, G4, M30, comments in parentheses), which runs on GRBL, LinuxCNC, Mach3/4 and UCCNC. The header gives the estimated cutting time. **Check new settings in a simulator such as [NC Viewer](https://ncviewer.com) or with an air cut before cutting a sheet.**
+
+### Viewing G-code
+
+**View G-code** (next to the downloads) opens the G-code of the sheet on screen in a viewer, so you can check it before sending. The same viewer opens files on the CNC share and files waiting in the queue:
+
+- **Top** and **3D** views. Scroll to zoom and double-click to fit. In the top view drag to pan; in 3D, drag to turn and Shift-drag to pan.
+- **Lines:** cuts are drawn in colour from light (shallow) to purple (deep), and rapid moves (G0) as red dashes. The green square and the axes mark X0 Y0.
+- **Simulation:** **Play** runs the program in real time at the chosen speed (1× to 500×), timed from the feed rates in the file, with rapids at 3000 mm/min. The slider jumps anywhere, and ◀ ▶ (or the arrow keys) step one line. The G-code around the tool is shown with the current line marked; click a line to jump there.
+- **Any CAM's files:** it reads G0–G3 (arcs with I J or R), G90/G91 and G20/G21, so files from MillMage, VCarve or Fusion work as well.
+
+### Files on the CNC share
+
+**CNC files** shows what is on the share, starting in the folder Send to CNC writes to:
+- **Browse:** click a folder to open it, and the path at the top to go back.
+- **Change:** **New folder**, **Rename**, **Delete** (a folder is deleted with everything in it), and **Move to…** for the ticked files. You can also drag files onto a folder, or onto a part of the path at the top.
+- **View** opens a G-code file in the viewer.
 
 ### Sending G-code to the CNC computer
 
@@ -182,7 +199,7 @@ The files use only common G-code (G0/G1/G2/G3, M3/M5, G4, M30, comments in paren
 - **Every send is queued first.** If the share answers, the files are delivered straight away. If not, they stay in the queue, which is kept in `queue/` in the data folder, so it survives a restart.
 - **The queue is checked every 5 minutes** while anything is waiting, and once when the app starts. The check opens a connection to the share's port (445) rather than sending a ping, because Windows blocks ping by default and the open port is what matters.
 - **Delivery is oldest first,** as soon as the share answers. Sending the same sheet again replaces its waiting copy.
-- **The *n waiting* button** next to **Send to CNC** opens the queue. There you can see when it was last checked, remove a send, or press **Send now**.
+- **Toolbar:** while anything is waiting, an **n waiting** button and a **Send now** button appear next to **Send to CNC**. **n waiting** opens the queue, where you can see when it was last checked, look at the files in the viewer, remove a send, or press **Send now**.
 - **Retries pause on other errors.** If delivery fails with a wrong password or missing write access, automatic retries stop, because Windows can lock an account after repeated failed logins. They resume when you save the share settings or press **Send now**.
 - **Docker logs:** `docker compose logs app` shows a line for every send the queue delivers.
 
@@ -230,7 +247,8 @@ To make your own font, either:
 - `generate_sheets.py`: layout, SVG/DXF/G-code output, CLI. The settings list (`FIELDS`) also builds the web form.
 - `stroke_font.py`: loads single-line fonts and lays out text.
 - `webapp.py` and `web/`: the web interface (Flask).
-- `smb_share.py`: sending G-code to a Windows or Samba share (pysmb, SMB1 and SMB2).
+- `smb_share.py`: sending G-code to a Windows or Samba share (pysmb, SMB1 and SMB2), and browsing and managing its files.
+- `web/viewer.js`: the G-code viewer and simulation.
 - `send_queue.py`: the queue that holds G-code while the share is offline, and the thread that delivers it.
 - `presets.default.json`: the presets a new installation starts with. Saved presets go to `presets.json`.
 - `tests/`: smoke tests that gate every release.

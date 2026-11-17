@@ -221,6 +221,11 @@ def send_smb():
     return jsonify(queued=list(files), reason=reason, queue=send_queue.status())
 
 
+@app.get("/api/smb/queue/<job_id>/<path:name>")
+def smb_queue_file(job_id: str, name: str):
+    return Response(send_queue.read_file(job_id, name), mimetype="text/plain")
+
+
 @app.get("/api/smb/queue")
 def smb_queue():
     return jsonify(send_queue.status())
@@ -236,6 +241,65 @@ def send_smb_queue():
 def remove_from_smb_queue(job_id: str):
     send_queue.remove(job_id)
     return jsonify(send_queue.status())
+
+
+@app.post("/api/gcode")
+def gcode_of_sheet():
+    """The G-code of the sheet on screen as text, for the G-code viewer."""
+    job, data = job_from_request()
+    _, files = sheet_files_from_request(job, data, name_from_request(job, data), "gcode")
+    return jsonify(files={name: payload.decode("ascii") for name, payload in files.items()})
+
+
+# The files on the CNC share. Paths are relative to the share, with / between folders.
+
+@app.get("/api/smb/files")
+def smb_files():
+    config = smb_share.load_config()
+    folder = smb_share.clean_path(config["folder"])  # where Send to CNC writes
+    path = request.args.get("path")
+    if path is None:  # first look: that folder, or the top of the share until the first send makes it
+        try:
+            entries = smb_share.list_folder(config, folder)
+            path = folder
+        except smb_share.Unreachable:
+            raise
+        except ValueError:
+            path, entries = "/", smb_share.list_folder(config, "/")
+    else:
+        path = smb_share.clean_path(path)
+        entries = smb_share.list_folder(config, path)
+    return jsonify(path=path, entries=entries, share=smb_share.unc({**config, "folder": ""}), folder=folder)
+
+
+@app.get("/api/smb/file")
+def smb_file():
+    return Response(smb_share.read_file(smb_share.load_config(), request.args.get("path", "")), mimetype="text/plain")
+
+
+@app.post("/api/smb/folder")
+def smb_make_folder():
+    smb_share.make_folder(smb_share.load_config(), request.get_json(force=True).get("path", ""))
+    return jsonify(ok=True)
+
+
+@app.post("/api/smb/rename")
+def smb_rename():
+    data = request.get_json(force=True)
+    return jsonify(path=smb_share.rename(smb_share.load_config(), data.get("path", ""), data.get("name", "")))
+
+
+@app.post("/api/smb/move")
+def smb_move():
+    data = request.get_json(force=True)
+    smb_share.move(smb_share.load_config(), list(data.get("paths") or []), data.get("to", ""))
+    return jsonify(ok=True)
+
+
+@app.post("/api/smb/delete")
+def smb_delete():
+    smb_share.delete(smb_share.load_config(), list(request.get_json(force=True).get("paths") or []))
+    return jsonify(ok=True)
 
 
 def main() -> None:
