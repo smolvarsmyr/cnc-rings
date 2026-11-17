@@ -190,6 +190,10 @@ FIELDS = (
                    depth=2.5, step=1.0, diameter=4.0),
     *_gcode_fields("text", "G-code: text", 2, "60° V-bit, 0.7 mm tip", 18000, feed=1000.0, plunge=300.0, depth=0.2,
                    step=0.0),
+    Field("gcode_text_order", "plate by plate", "choice", "G-code: text", "Order",
+          "Plate by plate finishes one plate (ring) before the next; row by row one row of plates. Both start at the "
+          "bottom row and work up, going back and forth along the rows. Free takes the shortest way over the "
+          "whole sheet.", ("plate by plate", "row by row", "free")),
     *_gcode_fields("grid", "G-code: grid lines", 2, "60° V-bit, 0.7 mm tip", 18000, feed=1000.0, plunge=300.0,
                    depth=0.7, step=0.0),
 )
@@ -983,6 +987,28 @@ def _nearest_first(shapes: list[Shape], g: _Program):
         yield shapes[i]
 
 
+def _text_in_order(job: Job, shapes: list[Shape], g: _Program):
+    """The engraved codes in the order set by gcode_text_order. Each shape is one copy of a code; the plate it
+    belongs to is the one its middle is in."""
+    order = job.settings.gcode_text_order
+    if order == "free":
+        yield from _nearest_first(shapes, g)
+        return
+    grid = job.grid
+    rows: dict[int, dict[int, list[Shape]]] = {}
+    for shape in shapes:
+        x0, y0, x1, y1 = shape_bbox(shape)
+        col = min(grid.cols, max(1, int(((x0 + x1) / 2 - grid.x0) // grid.plate_w) + 1))
+        row = min(grid.rows, max(1, int(((y0 + y1) / 2 - grid.y0) // grid.plate_h) + 1))
+        rows.setdefault(row, {}).setdefault(col, []).append(shape)
+    for i, row in enumerate(sorted(rows)):  # bottom row first
+        if order == "row by row":
+            yield from _nearest_first([shape for plate in rows[row].values() for shape in plate], g)
+        else:  # plate by plate, along the row and back along the next one
+            for col in sorted(rows[row], reverse=i % 2 == 1):
+                yield from _nearest_first(rows[row][col], g)
+
+
 def _strokes_nearest_first(shape: Polylines, g: _Program):
     """The strokes of a shape, each started from whichever end is closer to the tool."""
     strokes = [line + line[:1] if shape.closed else list(line) for line in shape.lines]
@@ -1122,7 +1148,8 @@ def _gcode_program(job: Job, sheet: Sheet, title: str, tool: int, ops: list[tupl
             for shape in _nearest_first(sheet.layers[layer], g):
                 _mill_hole(g, shape, depths, o, s.gcode_direction == "climb")
         else:
-            for shape in _nearest_first(sheet.layers[layer], g):
+            shapes = sheet.layers[layer]
+            for shape in _text_in_order(job, shapes, g) if layer == "TEXT" else _nearest_first(shapes, g):
                 for stroke in _strokes_nearest_first(shape, g):
                     _engrave(g, stroke, depths, o)
     g.lift()

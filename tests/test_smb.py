@@ -25,6 +25,18 @@ class FakeShare:
         self.logins = []
         self.online = True
 
+    @staticmethod
+    def unc(path):
+        return "\\\\cnc-pc\\gcode" + path.replace("/", "\\")
+
+    @staticmethod
+    def path(unc):
+        return unc[len("\\\\cnc-pc\\gcode"):].replace("\\", "/")
+
+    @staticmethod
+    def parent(path):
+        return path.rsplit("/", 1)[0] or "/"
+
     def connection(self, username, password, my_name, remote_name, domain="", is_direct_tcp=False):
         share = self
 
@@ -41,17 +53,50 @@ class FakeShare:
                 return [types.SimpleNamespace(name=n, isSpecial=False) for n in ("gcode", "IPC$")]
 
             def getAttributes(self, service, path, timeout=30):
+                if path in share.dirs:
+                    return types.SimpleNamespace(isDirectory=True, file_size=0)
+                if share.unc(path) in share.files:
+                    return types.SimpleNamespace(isDirectory=False, file_size=len(share.files[share.unc(path)]))
+                raise OperationFailure("not found", [types.SimpleNamespace(status=0xC0000034)])
+
+            def listPath(self, service, path, timeout=30):
                 if path not in share.dirs:
-                    raise OperationFailure("not found", [])
-                return types.SimpleNamespace(isDirectory=True)
+                    raise OperationFailure("not found", [types.SimpleNamespace(status=0xC000003A)])
+                entry = lambda name, is_dir, size: types.SimpleNamespace(
+                    filename=name, isDirectory=is_dir, file_size=size, last_write_time=1700000000.0)
+                out = [entry(".", True, 0), entry("..", True, 0)]
+                out += [entry(d.rsplit("/", 1)[1], True, 0) for d in share.dirs if d != "/" and share.parent(d) == path]
+                out += [entry(share.path(f).rsplit("/", 1)[1], False, len(data))
+                        for f, data in share.files.items() if share.parent(share.path(f)) == path]
+                return out
+
+            def retrieveFile(self, service, path, file_obj, timeout=30):
+                file_obj.write(share.files[share.unc(path)])
 
             def createDirectory(self, service, path, timeout=30):
-                assert path.rsplit("/", 1)[0] or "/" in share.dirs, "parent folder missing"
+                assert share.parent(path) in share.dirs, "parent folder missing"
                 share.dirs.add(path)
 
             def storeFile(self, service, path, file_obj, timeout=30):
-                assert path.rsplit("/", 1)[0] in share.dirs, "folder missing"
-                share.files["\\\\cnc-pc\\" + service + path.replace("/", "\\")] = file_obj.read()
+                assert share.parent(path) in share.dirs, "folder missing"
+                share.files[share.unc(path)] = file_obj.read()
+
+            def rename(self, service, old, new, timeout=30):
+                assert share.parent(new) in share.dirs, "target folder missing"
+                if old in share.dirs:  # a folder, with everything in it
+                    share.dirs = {new + d[len(old):] if d == old or d.startswith(old + "/") else d for d in share.dirs}
+                    share.files = {share.unc(new + share.path(f)[len(old):]) if share.path(f).startswith(old + "/") else f: data
+                                   for f, data in share.files.items()}
+                else:
+                    share.files[share.unc(new)] = share.files.pop(share.unc(old))
+
+            def deleteFiles(self, service, path, timeout=30):
+                del share.files[share.unc(path)]
+
+            def deleteDirectory(self, service, path, timeout=30):
+                assert not any(share.parent(d) == path for d in share.dirs if d != "/"), "folder not empty"
+                assert not any(share.parent(share.path(f)) == path for f in share.files), "folder not empty"
+                share.dirs.remove(path)
 
             def close(self):
                 pass
@@ -192,3 +237,58 @@ def test_remove_from_queue(share, client):
     send_queue.remove("..")  # only ever removes a folder of the queue
     assert send_queue.QUEUE_DIR.is_dir() and len(send_queue.jobs()) == 1
     assert client.delete(f"/api/smb/queue/{job_id}").get_json()["jobs"] == []
+
+
+def test_browse_and_manage_files(share, client):
+    client.put("/api/smb", json=FORM)
+    share.dirs |= {"/archive", "/archive/2025"}
+    share.files[share.unc("/archive/2025/old.ngc")] = b"G0 X1"
+    share.files[share.unc("/job.ngc")] = b"G21\nG0 X0 Y0\n"
+
+    # First look: the folder Send to CNC writes to, or the top of the share while that does not exist yet.
+    root = client.get("/api/smb/files").get_json()
+    assert root["path"] == "/" and root == client.get("/api/smb/files?path=/").get_json()
+    assert client.get("/api/smb/files?path=/nope").get_json()["error"].endswith("the folder does not exist")
+    assert root["share"] == "\\\\cnc-pc\\gcode" and root["folder"] == "/rings/2026"
+    assert [(e["name"], e["dir"]) for e in root["entries"]] == [("archive", True), ("job.ngc", False)]
+
+    assert client.get("/api/smb/file?path=/job.ngc").data == b"G21\nG0 X0 Y0\n"
+    assert client.post("/api/smb/folder", json={"path": "/rings"}).status_code == 200
+    assert client.post("/api/smb/folder", json={"path": "/rings"}).status_code == 400  # already there
+    assert client.post("/api/smb/rename", json={"path": "/job.ngc", "name": "PL37.ngc"}).get_json() == {"path": "/PL37.ngc"}
+    assert client.post("/api/smb/move", json={"paths": ["/PL37.ngc", "/archive"], "to": "/rings"}).status_code == 200
+    entries = client.get("/api/smb/files?path=/rings").get_json()["entries"]
+    assert [e["name"] for e in entries] == ["archive", "PL37.ngc"]
+    assert share.files[share.unc("/rings/archive/2025/old.ngc")] == b"G0 X1"
+
+    assert client.post("/api/smb/delete", json={"paths": ["/rings/archive"]}).status_code == 200  # not empty
+    assert [e["name"] for e in client.get("/api/smb/files?path=/rings").get_json()["entries"]] == ["PL37.ngc"]
+
+
+@pytest.mark.parametrize("request_", [
+    ("get", "/api/smb/files?path=../etc", None),
+    ("post", "/api/smb/delete", {"paths": ["/*.ngc"]}),
+    ("post", "/api/smb/delete", {"paths": ["/"]}),
+    ("post", "/api/smb/rename", {"path": "/a.ngc", "name": "x/y.ngc"}),
+    ("post", "/api/smb/move", {"paths": ["/rings"], "to": "/rings/2026"}),
+    ("post", "/api/smb/move", {"paths": ["/a.ngc"], "to": "/no-such-folder"}),
+])
+def test_file_operations_refuse_bad_paths(share, client, request_):
+    client.put("/api/smb", json=FORM)
+    share.dirs |= {"/rings", "/rings/2026"}
+    share.files[share.unc("/a.ngc")] = b"x"
+    method, url, body = request_
+    response = getattr(client, method)(url, json=body) if body is not None else getattr(client, method)(url)
+    assert response.status_code == 400
+    assert share.files == {share.unc("/a.ngc"): b"x"} and share.dirs == {"/", "/rings", "/rings/2026"}
+
+
+def test_gcode_of_sheet_and_queued_files_for_the_viewer(share, client):
+    gcode = client.post("/api/gcode", json=SEND).get_json()["files"]
+    assert list(gcode) == FILES and gcode[FILES[0]].startswith("(PL37-PM02 - sheet 1 of 1: staple holes)")
+    client.put("/api/smb", json=FORM)
+    share.online = False
+    job = client.post("/api/smb/send", json=SEND).get_json()["queue"]["jobs"][0]
+    assert client.get(f"/api/smb/queue/{job['id']}/{FILES[1]}").data.decode() == gcode[FILES[1]]
+    assert client.get(f"/api/smb/queue/{job['id']}/other.ngc").status_code == 400
+

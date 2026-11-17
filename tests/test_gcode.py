@@ -174,3 +174,39 @@ def test_web_download():
 
     zipped = client.post("/api/download", json={**body, "format": "zip"})
     assert any(name.endswith(".ngc") for name in zipfile.ZipFile(io.BytesIO(zipped.data)).namelist())
+
+
+def text_plates(order):
+    """The plates the text cuts visit, in order, as (row, column) with row 1 at the bottom."""
+    job = make_job(gcode_text_order=order, gcode_grid_enabled=False, gcode_origin="bottom-left")
+    program = gcode_files(job)["t_2_text_T2.ngc"]
+    g = job.grid
+    visits = []
+    for code, start, end in check_file(program, job.settings, "text"):
+        if code and end["Z"] < 0:
+            plate = (int((end["Y"] - g.y0) // g.plate_h) + 1, int((end["X"] - g.x0) // g.plate_w) + 1)
+            if not visits or visits[-1] != plate:
+                visits.append(plate)
+    return job, visits
+
+
+def test_text_plate_by_plate_from_the_bottom():
+    job, visits = text_plates("plate by plate")
+    plates_with_text = {(p.row, p.col) for p in job.sheets[0].plates if p.code}
+    assert len(visits) == len(plates_with_text) and set(visits) == plates_with_text  # each plate once, finished
+    assert [row for row, _ in visits] == sorted(row for row, _ in visits)  # bottom row first, then up
+    first_row = [col for row, col in visits if row == 1]
+    second_row = [col for row, col in visits if row == 2]
+    assert first_row == sorted(first_row) and second_row == sorted(second_row, reverse=True)  # back and forth
+
+
+def test_text_row_by_row_from_the_bottom():
+    _, visits = text_plates("row by row")
+    rows = [row for row, _ in visits]
+    assert rows == sorted(rows)  # never back to a lower row
+
+
+def test_text_free_order_is_the_shortest_way():
+    _, visits = text_plates("free")
+    rows = [row for row, _ in visits]
+    assert rows != sorted(rows)

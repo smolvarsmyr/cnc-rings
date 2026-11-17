@@ -68,6 +68,14 @@ def enqueue(files: dict[str, bytes], label: str) -> str:
     return job_id
 
 
+def read_file(job_id: str, name: str) -> bytes:
+    """A file waiting in the queue, e.g. to look at it in the G-code viewer."""
+    job = next((job for job in jobs() if job["id"] == job_id), None)
+    if job is None or name not in job["files"]:
+        raise ValueError("That file is no longer in the queue")
+    return (QUEUE_DIR / job_id / name).read_bytes()
+
+
 def remove(job_id: str) -> None:
     if job_id in {job["id"] for job in jobs()}:  # only ever a folder of the queue
         shutil.rmtree(QUEUE_DIR / job_id, ignore_errors=True)

@@ -613,22 +613,31 @@ function renderQueue(queue) {
   state.queue = queue;
   const n = queue.jobs.length;
   $("#queue-badge").hidden = n === 0;
+  $("#queue-send-now").hidden = n === 0;
   $("#queue-badge").textContent = `${n} waiting`;
-  $("#queue").hidden = n === 0;
   $("#queue-list").replaceChildren(...queue.jobs.map((job) => {
     const remove = el("button", { type: "button", class: "quiet", title: "Remove from the queue" }, "Remove");
     remove.addEventListener("click", async () => {
       renderQueue(await getJSON(`/api/smb/queue/${encodeURIComponent(job.id)}`, { method: "DELETE" }));
     });
+    const sources = job.files.map((name) => ({
+      name, load: async () => (await api(`/api/smb/queue/${encodeURIComponent(job.id)}/${encodeURIComponent(name)}`)).text(),
+    }));
+    const fileItems = job.files.map((name, i) => {
+      const view = el("button", { type: "button", class: "link" }, name);
+      view.title = "Show in the G-code viewer";
+      view.addEventListener("click", () => openGcodeViewer(sources, i));
+      return el("li", {}, view);
+    });
     return el("li", {},
-      el("span", {}, `${job.label} (${job.files.length} file${job.files.length === 1 ? "" : "s"})`,
-        el("span", { class: "when" }, ` · queued ${clock(job.created)}`)),
-      remove,
-      job.error ? el("span", { class: "error" }, job.error) : null);
+      el("div", { class: "job" }, el("b", {}, job.label), el("span", { class: "when" }, ` · queued ${clock(job.created)}`), remove),
+      el("ul", { class: "job-files" }, ...fileItems),
+      job.error ? el("div", { class: "error" }, job.error) : null);
   }));
+  if (!n) $("#queue-list").append(el("li", { class: "muted" }, "Nothing is waiting."));
   const info = [];
   if (queue.paused) info.push("Automatic retries are paused after the error above: fix the settings and save, or press Send now.");
-  else if (queue.next_check) info.push(`Next check ${clock(queue.next_check)}, then every ${Math.round(queue.interval / 60)} minutes.`);
+  else if (n && queue.next_check) info.push(`Next check ${clock(queue.next_check)}, then every ${Math.round(queue.interval / 60)} minutes.`);
   if (queue.last_check) info.push(`Last checked ${clock(queue.last_check)}: ${queue.online ? "the share answered" : "no answer"}.`);
   $("#queue-info").textContent = info.join(" ");
 }
@@ -641,19 +650,236 @@ async function refreshQueue() {
   }
 }
 
-async function sendQueue() {
-  const button = $("#queue-send");
+async function openQueue() {
+  $("#queue-result").hidden = true;
+  await refreshQueue();
+  $("#queue-dialog").showModal();
+}
+
+/** Try to send the queue now, from the toolbar or from the queue dialog. */
+async function sendQueue(button) {
+  const label = button.textContent;
   button.disabled = true;
   button.textContent = "Sending…";
+  const inDialog = $("#queue-dialog").open;
+  const report = (text, ok) => {
+    if (inDialog) {
+      $("#queue-result").hidden = false;
+      $("#queue-result").className = `message ${ok ? "ok" : "warning"}`;
+      $("#queue-result").textContent = text;
+    } else if (ok) {
+      showNotice(text);
+    } else {
+      showMessages([text, ...(state.result?.warnings ?? [])]);
+    }
+  };
   try {
+    const before = state.queue?.jobs.length ?? 0;
     renderQueue(await getJSON("/api/smb/queue/send", { method: "POST" }));
-    if (!state.queue.jobs.length) smbResult("Everything in the queue was sent.", true);
+    const left = state.queue.jobs.length;
+    if (!left) report(`Sent everything that was waiting (${before} send${before === 1 ? "" : "s"}).`, true);
+    else if (!state.queue.online) report(`The CNC share does not answer yet; ${left} send${left === 1 ? " is" : "s are"} still waiting.`, false);
+    else report(`${left} send${left === 1 ? " is" : "s are"} still waiting: ${state.queue.jobs[0].error || state.queue.paused}`, false);
   } catch (err) {
-    smbResult(err.message, false);
+    report(err.message, false);
   } finally {
     button.disabled = false;
-    button.textContent = "Send now";
+    button.textContent = label;
   }
+}
+
+async function viewSheetGcode() {
+  try {
+    const sheet = await getJSON("/api/gcode", { method: "POST", body: payload({ sheet: state.sheet + 1 }) });
+    openGcodeViewer(Object.entries(sheet.files).map(([name, text]) => ({ name, load: async () => text })));
+  } catch (err) {
+    showMessages(state.result?.warnings ?? [], err.message);
+  }
+}
+
+// ---------------------------------------------------------------- CNC files
+
+const GCODE_EXTENSIONS = /\.(ngc|nc|gcode|gc|tap|cnc|txt)$/i;
+const browse = { path: "/", entries: [], selected: new Set(), share: "" };
+const childPath = (folder, name) => `${folder === "/" ? "" : folder}/${name}`;
+const parentPath = (path) => path.replace(/\/[^/]*$/, "") || "/";
+
+function filesMessage(text, kind = "error") {
+  const box = $("#files-message");
+  box.hidden = !text;
+  box.className = `message ${kind}`;
+  box.textContent = text ?? "";
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function openFiles() {
+  $("#files-dialog").showModal();
+  await loadFolder(null);
+}
+
+/** Show a folder of the share; null is the folder Send to CNC writes to. */
+async function loadFolder(path) {
+  filesMessage("Loading…", "muted");
+  try {
+    const data = await getJSON(`/api/smb/files${path === null ? "" : `?path=${encodeURIComponent(path)}`}`);
+    Object.assign(browse, { path: data.path, entries: data.entries, share: data.share });
+    browse.selected.clear();
+    filesMessage(path === null && data.path !== data.folder
+      ? `The folder Send to CNC uses (${data.folder}) does not exist yet; it is made on the first send.` : "", "muted");
+  } catch (err) {
+    browse.entries = [];
+    filesMessage(err.message);
+  }
+  renderFiles();
+}
+
+/** Accept files dragged onto a folder (a row or a crumb) and move them there. */
+function dropTarget(node, folder) {
+  node.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer.types.includes("application/x-cnc-paths")) return;
+    e.preventDefault();
+    node.classList.add("drop");
+  });
+  node.addEventListener("dragleave", () => node.classList.remove("drop"));
+  node.addEventListener("drop", (e) => {
+    e.preventDefault();
+    node.classList.remove("drop");
+    const paths = JSON.parse(e.dataTransfer.getData("application/x-cnc-paths") || "[]").filter((p) => p !== folder);
+    if (paths.length) moveFiles(paths, folder);
+  });
+}
+
+function renderFiles() {
+  const crumbs = [el("button", { type: "button", class: "link" }, browse.share || "share")];
+  dropTarget(crumbs[0], "/");
+  crumbs[0].addEventListener("click", () => loadFolder("/"));
+  let path = "";
+  for (const part of browse.path.split("/").filter(Boolean)) {
+    path += `/${part}`;
+    const target = path;
+    const crumb = el("button", { type: "button", class: "link" }, part);
+    crumb.addEventListener("click", () => loadFolder(target));
+    dropTarget(crumb, target);
+    crumbs.push(el("span", { class: "sep" }, "\\"), crumb);
+  }
+  $("#files-crumbs").replaceChildren(...crumbs);
+  $("#files-up").disabled = browse.path === "/";
+
+  $("#files-list").replaceChildren(...browse.entries.map((entry) => {
+    const path = childPath(browse.path, entry.name);
+    const check = el("input", { type: "checkbox", checked: browse.selected.has(path) });
+    check.addEventListener("change", () => {
+      if (check.checked) browse.selected.add(path);
+      else browse.selected.delete(path);
+      renderSelection();
+    });
+    let name;
+    if (entry.dir) {
+      name = el("button", { type: "button", class: "link folder" }, entry.name);
+      name.addEventListener("click", () => loadFolder(path));
+    } else {
+      name = el("span", { class: "file" }, entry.name);
+    }
+    const actions = [];
+    if (!entry.dir && GCODE_EXTENSIONS.test(entry.name)) {
+      const view = el("button", { type: "button" }, "View");
+      view.addEventListener("click", () => openGcodeViewer([{
+        name: entry.name, load: async () => (await api(`/api/smb/file?path=${encodeURIComponent(path)}`)).text(),
+      }]));
+      actions.push(view);
+    }
+    const rename = el("button", { type: "button", class: "quiet" }, "Rename");
+    rename.addEventListener("click", () => renameFile(path, entry.name));
+    actions.push(rename);
+    const row = el("tr", { draggable: "true", class: entry.dir ? "dir" : "" },
+      el("td", { class: "check" }, check), el("td", {}, name),
+      el("td", { class: "num" }, entry.dir ? "" : formatSize(entry.size)),
+      el("td", { class: "muted" }, entry.modified ? clock(entry.modified) : ""),
+      el("td", { class: "actions" }, ...actions));
+    row.addEventListener("dragstart", (e) => {
+      const paths = browse.selected.has(path) ? [...browse.selected] : [path];
+      e.dataTransfer.setData("application/x-cnc-paths", JSON.stringify(paths));
+      e.dataTransfer.effectAllowed = "move";
+    });
+    if (entry.dir) dropTarget(row, path);
+    return row;
+  }));
+  if (!browse.entries.length && $("#files-message").hidden) {
+    $("#files-list").append(el("tr", {}, el("td", { colspan: 5, class: "muted empty" }, "This folder is empty.")));
+  }
+  renderSelection();
+}
+
+function renderSelection() {
+  const n = browse.selected.size;
+  $("#files-selected").textContent = n ? `${n} selected` : "";
+  $("#files-move").disabled = $("#files-delete").disabled = n === 0;
+  $("#files-all").checked = n > 0 && n === browse.entries.length;
+}
+
+/** Run a change on the share, then show the folder again with a message. */
+async function changeFiles(request, done) {
+  try {
+    await request();
+    await loadFolder(browse.path);
+    filesMessage(done, "ok");
+  } catch (err) {
+    filesMessage(err.message);
+  }
+}
+
+function newFolder() {
+  const name = prompt("Name of the new folder:")?.trim();
+  if (!name) return;
+  changeFiles(() => getJSON("/api/smb/folder", { method: "POST", body: { path: childPath(browse.path, name) } }),
+    `Made the folder ${name}.`);
+}
+
+function renameFile(path, oldName) {
+  const name = prompt(`New name for ${oldName}:`, oldName)?.trim();
+  if (!name || name === oldName) return;
+  changeFiles(() => getJSON("/api/smb/rename", { method: "POST", body: { path, name } }), `Renamed ${oldName} to ${name}.`);
+}
+
+function moveFiles(paths, folder) {
+  const what = paths.length === 1 ? paths[0].split("/").pop() : `${paths.length} items`;
+  changeFiles(() => getJSON("/api/smb/move", { method: "POST", body: { paths, to: folder } }),
+    `Moved ${what} to ${folder === "/" ? "the top of the share" : folder}.`);
+}
+
+function moveSelected() {
+  const folders = browse.entries.filter((e) => e.dir).map((e) => childPath(browse.path, e.name));
+  const hint = folders.length ? `\nFolders here: ${folders.join(", ")}` : "";
+  const folder = prompt(`Move ${browse.selected.size} item(s) to which folder? Use / between folders, / alone for the top of the share.${hint}`,
+    folders[0] ?? parentPath(browse.path))?.trim();
+  if (!folder) return;
+  moveFiles([...browse.selected], folder.startsWith("/") ? folder : childPath(browse.path, folder));
+}
+
+function deleteSelected() {
+  const paths = [...browse.selected];
+  const dirs = browse.entries.filter((e) => e.dir && browse.selected.has(childPath(browse.path, e.name))).length;
+  const names = paths.map((p) => p.split("/").pop()).join("\n");
+  if (!confirm(`Delete ${paths.length} item(s) from the CNC share?${dirs ? " Folders are deleted with everything in them." : ""}\n\n${names}`)) return;
+  changeFiles(() => getJSON("/api/smb/delete", { method: "POST", body: { paths } }), `Deleted ${paths.length} item(s).`);
+}
+
+function setupFiles() {
+  $("#files-open").addEventListener("click", openFiles);
+  $("#files-up").addEventListener("click", () => loadFolder(parentPath(browse.path)));
+  $("#files-refresh").addEventListener("click", () => loadFolder(browse.path));
+  $("#files-new-folder").addEventListener("click", newFolder);
+  $("#files-move").addEventListener("click", moveSelected);
+  $("#files-delete").addEventListener("click", deleteSelected);
+  $("#files-all").addEventListener("change", (e) => {
+    browse.selected = new Set(e.target.checked ? browse.entries.map((entry) => childPath(browse.path, entry.name)) : []);
+    renderFiles();
+  });
 }
 
 async function openSmb() {
@@ -663,7 +889,6 @@ async function openSmb() {
     $("#smb-password").value = "";
     $("#smb-password").placeholder = config.password_set ? "saved" : "";
     $("#smb-result").hidden = true;
-    await refreshQueue();
     $("#smb-dialog").showModal();
   } catch (err) {
     showMessages(state.result?.warnings ?? [], err.message);
@@ -808,8 +1033,13 @@ async function init() {
   $("#smb-test").addEventListener("click", testSmb);
   $("#smb-cancel").addEventListener("click", () => $("#smb-dialog").close());
   $("#smb-form").addEventListener("submit", saveSmb);
-  $("#queue-badge").addEventListener("click", openSmb);
-  $("#queue-send").addEventListener("click", sendQueue);
+  $("#queue-badge").addEventListener("click", openQueue);
+  $("#queue-send").addEventListener("click", (e) => sendQueue(e.currentTarget));
+  $("#queue-send-now").addEventListener("click", (e) => sendQueue(e.currentTarget));
+  $("#view-gcode").addEventListener("click", viewSheetGcode);
+  document.querySelectorAll("dialog [data-close]").forEach((b) => b.addEventListener("click", () => b.closest("dialog").close()));
+  setupFiles();
+  setupGcodeViewer();
   refreshQueue();
   setInterval(refreshQueue, 30000);
   document.querySelectorAll("[data-download]").forEach((button) => {

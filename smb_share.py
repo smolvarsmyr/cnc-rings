@@ -33,6 +33,7 @@ STATUS = {
     0xC00000CC: "there is no share with that name on the server",
     0xC0000034: "the folder does not exist",
     0xC000003A: "the folder does not exist",
+    0xC000000F: "the folder does not exist",
     0xC000007F: "the disk is full",
     0xC0000043: "the file is in use on the CNC; close it in the controller and send again",
 }
@@ -174,3 +175,108 @@ def send(config: dict[str, Any], files: dict[str, bytes]) -> list[str]:
         for filename, data in files.items():
             conn.storeFile(config["share"], _path(config, filename), io.BytesIO(data), timeout=TIMEOUT)
     return [unc(config, filename) for filename in files]
+
+
+# --------------------------------------------------------------------------
+# Browsing and managing the files on the share
+# --------------------------------------------------------------------------
+
+MAX_VIEW = 20 * 1024 * 1024  # bytes: larger files are not sent to the viewer
+
+
+def clean_path(path: str) -> str:
+    """A path inside the share, as pysmb takes it ("/rings/a.ngc"). Refuses .. and wildcards, so only the
+    named file or folder can be touched."""
+    parts = [p for p in re.split(r"[\\/]+", str(path or "")) if p and p != "."]
+    if ".." in parts:
+        raise ValueError("Paths with .. are not allowed")
+    bad = set('*?<>|:"')
+    if any(bad & set(part) for part in parts):
+        raise ValueError(f"Names cannot contain any of {' '.join(sorted(bad))}")
+    return "/" + "/".join(parts)
+
+
+def _name(name: str) -> str:
+    name = str(name or "").strip()
+    if not name or "/" in name or "\\" in name or clean_path(name) != "/" + name:
+        raise ValueError(f"'{name}' is not a valid file or folder name")
+    return name
+
+
+def list_folder(config: dict[str, Any], path: str) -> list[dict[str, Any]]:
+    """Folders first, then files, each by name."""
+    path = clean_path(path)
+    with _session(config) as conn:
+        try:
+            found = conn.listPath(config["share"], path, timeout=TIMEOUT)
+        except OperationFailure as exc:
+            # Some servers answer "no such file" for an empty folder (no . and .. entries).
+            if exc.smb_messages and exc.smb_messages[-1].status == 0xC000000F and _is_dir(conn, config, path):
+                return []
+            raise
+        entries = [{"name": f.filename, "dir": f.isDirectory, "size": f.file_size, "modified": f.last_write_time}
+                   for f in found if f.filename not in (".", "..")]
+    return sorted(entries, key=lambda e: (not e["dir"], e["name"].lower()))
+
+
+def read_file(config: dict[str, Any], path: str) -> bytes:
+    path = clean_path(path)
+    with _session(config) as conn:
+        attributes = conn.getAttributes(config["share"], path, timeout=TIMEOUT)
+        if attributes.isDirectory:
+            raise ValueError(f"{path} is a folder")
+        if attributes.file_size > MAX_VIEW:
+            raise ValueError(f"{path} is too big to show ({attributes.file_size // 1024 // 1024} MB)")
+        data = io.BytesIO()
+        conn.retrieveFile(config["share"], path, data, timeout=TIMEOUT)
+    return data.getvalue()
+
+
+def make_folder(config: dict[str, Any], path: str) -> None:
+    path = clean_path(path)
+    with _session(config) as conn:
+        if _is_dir(conn, config, path):
+            raise ValueError(f"{path} already exists")
+        conn.createDirectory(config["share"], path, timeout=TIMEOUT)
+
+
+def rename(config: dict[str, Any], path: str, new_name: str) -> str:
+    """Rename a file or folder where it is. Returns its new path."""
+    path = clean_path(path)
+    new_path = path.rsplit("/", 1)[0] + "/" + _name(new_name)
+    with _session(config) as conn:
+        conn.rename(config["share"], path, new_path, timeout=TIMEOUT)
+    return new_path
+
+
+def move(config: dict[str, Any], paths: list[str], folder: str) -> None:
+    """Move files and folders into a folder of the share."""
+    folder = clean_path(folder)
+    with _session(config) as conn:
+        if folder != "/" and not _is_dir(conn, config, folder):
+            raise ValueError(f"There is no folder {folder}")
+        for path in map(clean_path, paths):
+            target = folder.rstrip("/") + "/" + path.rsplit("/", 1)[1]
+            if folder == path or folder.startswith(path + "/"):
+                raise ValueError(f"Cannot move {path} into itself")
+            if target != path:
+                conn.rename(config["share"], path, target, timeout=TIMEOUT)
+
+
+def delete(config: dict[str, Any], paths: list[str]) -> None:
+    """Delete files, and folders with everything in them."""
+    with _session(config) as conn:
+        for path in map(clean_path, paths):
+            if path == "/":
+                raise ValueError("The share itself cannot be deleted")
+            _delete(conn, config["share"], path)
+
+
+def _delete(conn: SMBConnection, share: str, path: str) -> None:
+    if not conn.getAttributes(share, path, timeout=TIMEOUT).isDirectory:
+        conn.deleteFiles(share, path, timeout=TIMEOUT)
+        return
+    for f in conn.listPath(share, path, timeout=TIMEOUT):
+        if f.filename not in (".", ".."):
+            _delete(conn, share, f"{path}/{f.filename}")
+    conn.deleteDirectory(share, path, timeout=TIMEOUT)
