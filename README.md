@@ -31,6 +31,7 @@ python3 -m venv .venv
 
 - Paste codes or ranges (`PL37..PM02`). The preview updates as you type.
 - Pick a preset, adjust settings, and use **Save preset…** to store the result in `presets.json`, e.g. one preset per species or ring size. **Export** downloads all presets as a file, and **Import…** adds the presets from such a file, for example to copy them to another machine.
+- **Sheet colour** and **Text colour** set how the preview looks, for example white paint on black acrylic. They are saved with the preset, and the files keep their own layer colours.
 - Click a plate in the preview to skip it for staples, or fill in rows × columns under *Skipped plates*.
 - Scroll to zoom, drag to pan, double-click to fit.
 - **Measure** (or the M key) measures distances on the sheet, for example from a corner to a staple hole:

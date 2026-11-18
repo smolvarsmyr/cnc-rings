@@ -125,6 +125,7 @@ details.group > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .field .name { font-size: 13px; }
 .field .control { display: flex; align-items: center; gap: 4px; }
 .field .control > input, .field .control > select { width: 100%; }
+.field .control > input[type="color"] { height: 28px; padding: 2px; cursor: pointer; }
 .field .unit { color: var(--muted); font-size: 12px; width: 22px; flex: none; }
 .field.wide { grid-template-columns: 1fr; }
 .field.check .control { justify-content: flex-start; }

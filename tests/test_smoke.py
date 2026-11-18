@@ -79,3 +79,13 @@ def test_preview_snap_targets(client):
     assert points[(50, 600 - 6.25)] == "hole centre"  # first staple on the bottom edge
     assert points[(40, 600 - 12.5 - 57.5)] == "plate centre"
     assert [20, 600 - 12.5, 580, 600 - 12.5] in sheet["snap"]["lines"]  # bottom grid line
+
+
+def test_colours_are_checked_and_kept_in_presets(client):
+    s, _ = gs.normalize_settings({"sheet_colour": "#FFF", "text_colour": " #1A2b3C "})
+    assert (s.sheet_colour, s.text_colour) == ("#ffffff", "#1a2b3c")
+    assert gs.normalize_settings({})[0].sheet_colour == "#151515"
+    with pytest.raises(ValueError, match="Text colour"):
+        gs.normalize_settings({"text_colour": "red"})
+    schema = client.get("/api/schema").get_json()
+    assert {f["key"]: f["kind"] for f in schema["fields"]}["sheet_colour"] == "colour"
