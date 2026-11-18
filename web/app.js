@@ -113,6 +113,8 @@ function fieldRow(f) {
   } else if (f.kind === "choice" || f.kind === "font") {
     const options = f.kind === "font" ? state.schema.fonts : f.choices;
     control = el("select", { id, name: f.key }, ...options.map((o) => el("option", { value: o }, o)));
+  } else if (f.kind === "colour") {
+    control = el("input", { type: "color", id, name: f.key });
   } else if (NUMERIC.has(f.kind)) {
     control = el("input", {
       type: "number", id, name: f.key, step: f.kind === "int" ? "1" : "any",
@@ -175,6 +177,7 @@ function writeSettings(settings) {
     else if (f.kind === "cells") control.value = formatCells(Array.isArray(value) ? normalizeCells(value) : []);
     else control.value = value ?? "";
   }
+  applyColours();
 }
 
 /** Settings in a comparable form, to tell whether the form differs from the preset. */
@@ -186,6 +189,7 @@ function canonical(settings) {
     else if (f.kind === "auto_mm") v = v === null || v === "" ? null : Number(v);
     else if (NUMERIC.has(f.kind)) v = Number(v);
     else if (f.kind === "bool") v = Boolean(v);
+    else if (f.kind === "colour") v = String(v ?? "").toLowerCase();
     else v = String(v ?? "");
     out[f.key] = v;
   }
@@ -264,7 +268,16 @@ async function importPresets(file) {
 
 let timer = null;
 
+/** The sheet and text colours of the preset, for the preview and the legend. */
+function applyColours() {
+  for (const [key, variable] of [["sheet_colour", "--sheet"], ["text_colour", "--engrave"]]) {
+    const value = input(key)?.value;
+    if (value) document.documentElement.style.setProperty(variable, value);
+  }
+}
+
 function onChange() {
+  applyColours();
   updateDirty();
   saveLocal();
   clearTimeout(timer);

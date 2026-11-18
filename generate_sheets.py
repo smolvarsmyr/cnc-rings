@@ -71,7 +71,7 @@ LAYERS = {
 class Field:
     key: str
     default: Any
-    kind: str  # mm | number | int | bool | choice | font | text | auto_mm | cells
+    kind: str  # mm | number | int | bool | choice | font | text | auto_mm | cells | colour
     group: str
     label: str
     help: str = ""
@@ -110,6 +110,8 @@ FIELDS = (
     Field("margin", 12.0, "mm", "Sheet", "Minimum margin",
           "Kept free along every edge. The plate grid is centred on the sheet.", minimum=0),
     Field("sheet_outline", True, "bool", "Sheet", "Draw sheet outline", "Reference rectangle on the SHEET layer."),
+    Field("sheet_colour", "#151515", "colour", "Sheet", "Sheet colour",
+          "Colour of the material, for the preview only. The files keep their layer colours."),
 
     Field("plate_width", 40.0, "mm", "Plates", "Plate width", minimum=1),
     Field("plate_height", 115.0, "mm", "Plates", "Plate height", minimum=1),
@@ -119,6 +121,8 @@ FIELDS = (
           "Codes fill each row left to right, starting with the bottom or the top row.", ("bottom", "top")),
 
     Field("font", "hershey_sans.json", "font", "Text", "Font"),
+    Field("text_colour", "#f2f2f2", "colour", "Text", "Text colour",
+          "Colour of the engraved text (or the paint in it), for the preview only."),
     Field("copies", 4, "int", "Text", "Copies per plate", minimum=1),
     Field("text_height", 15.5, "mm", "Text", "Text height", "Height of the capital letters.", minimum=0.1),
     Field("line_pitch", 21.5, "mm", "Text", "Distance between text rows",
@@ -246,6 +250,13 @@ def _coerce(f: Field, value: Any) -> Any:
         return match
     if f.kind == "cells":
         return parse_cells(value)
+    if f.kind == "colour":
+        colour = str(value).strip().lower()
+        if re.fullmatch(r"#[0-9a-f]{3}", colour):
+            colour = "#" + "".join(c * 2 for c in colour[1:])
+        if not re.fullmatch(r"#[0-9a-f]{6}", colour):
+            raise ValueError(f"{f.label}: '{value}' is not a colour like #1a2b3c")
+        return colour
     return str(value).strip()
 
 
