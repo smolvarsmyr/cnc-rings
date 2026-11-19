@@ -184,6 +184,10 @@ FIELDS = (
           "For staple holes wider than the tool, with the spindle turning clockwise (M3).",
           ("climb", "conventional")),
     Field("gcode_spinup", 3.0, "number", "G-code", "Spindle spin-up wait (s)", minimum=0),
+    Field("gcode_dwell", "G4 P seconds", "choice", "G-code", "Wait command",
+          "How the controller reads G4. GRBL, LinuxCNC and UCCNC take P in seconds. Fanuc-style controllers "
+          "such as DDCS take P in milliseconds, or X in seconds; there G4 P3 waits only 3 ms.",
+          ("G4 P seconds", "G4 P milliseconds", "G4 X seconds")),
     Field("gcode_park_x", None, "auto_mm", "G-code", "Park at X",
           "Where the tool goes when a file ends, in G-code coordinates. Empty = stay above the last cut."),
     Field("gcode_park_y", None, "auto_mm", "G-code", "Park at Y"),
@@ -890,6 +894,14 @@ def _gcode_comment(text: str) -> str:
     return "(" + text.translate(_COMMENT_CHARS).encode("ascii", "replace").decode() + ")"
 
 
+def dwell(style: str, seconds: float) -> str:
+    """G4 written the way the controller reads it (see the gcode_dwell setting)."""
+    if style == "G4 P milliseconds":
+        return f"G4 P{round(seconds * 1000)}"
+    letter = "X" if style == "G4 X seconds" else "P"
+    return f"G4 {letter}{_num(seconds)}"
+
+
 class _Program:
     """The moves of one G-code file.
 
@@ -976,7 +988,7 @@ class _Program:
         if rpm:
             self.lines.append(f"M3 S{rpm}")
             if self.s.gcode_spinup > 0:
-                self.lines.append(f"G4 P{_num(self.s.gcode_spinup)}")
+                self.lines.append(dwell(self.s.gcode_dwell, self.s.gcode_spinup))
                 self.minutes += self.s.gcode_spinup / 60
         else:
             self.lines.append("M5")

@@ -251,3 +251,11 @@ def test_web_selected_download():
     assert client.post("/api/download", json={**body, "plates": []}).status_code == 400
     full = client.post("/api/download", json={**body, "plates": None})
     assert full.data[:2] == b"PK"  # without plates: the whole sheet, staple holes too
+
+
+@pytest.mark.parametrize("style, line", [("G4 P seconds", "G4 P2.5"), ("G4 P milliseconds", "G4 P2500"),
+                                         ("G4 X seconds", "G4 X2.5")])
+def test_spindle_wait_in_the_controllers_units(style, line):
+    for program in gcode_files(make_job(gcode_spinup=2.5, gcode_dwell=style)).values():
+        lines = program.splitlines()
+        assert lines[lines.index(next(l for l in lines if l.startswith("M3 "))) + 1] == line

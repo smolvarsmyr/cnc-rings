@@ -164,7 +164,7 @@ How each operation is cut:
 - **Staple holes** as wide as the tool are drilled with pecks. Slots as wide as the tool are cut along their length. Wider holes are milled out from the middle to the edge, with a helix into round holes and a ramp into slots. The *Tool diameter* setting decides which method is used. A warning appears if the tool is wider than a hole.
 - The tool never goes down faster than the plunge rate, also on ramps and helixes. All moves between cuts are at the safe height.
 
-The files use only common G-code (G0/G1/G2/G3, M3/M5, G4, M30, comments in parentheses), which runs on GRBL, LinuxCNC, Mach3/4 and UCCNC. The header gives the estimated cutting time. **Check new settings in a simulator such as [NC Viewer](https://ncviewer.com) or with an air cut before cutting a sheet.**
+The files use only common G-code (G0/G1/G2/G3, M3/M5, G4, M30, comments in parentheses), which runs on GRBL, LinuxCNC, Mach3/4 and UCCNC. Controllers differ in how they read the wait after starting the spindle (G4): GRBL, LinuxCNC and UCCNC take `G4 P` in seconds, Fanuc-style controllers such as DDCS take it in milliseconds (`G4 P3` waits 3 ms). Pick the one that fits under *G-code → Wait command*. The header gives the estimated cutting time. **Check new settings in a simulator such as [NC Viewer](https://ncviewer.com) or with an air cut before cutting a sheet.**
 
 ### G-code for some of the rings
 
