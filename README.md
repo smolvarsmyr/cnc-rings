@@ -161,6 +161,7 @@ How each operation is cut:
 
 - **Text and grid lines** are followed on the line. Each line ramps in along its first segment, and with several passes it goes back and forth without lifting.
 - **Text order** (*Order* under *G-code: text*): **plate by plate** (the default) finishes one plate, so one ring, before starting the next. **Row by row** engraves one row of plates at a time. Both start at the bottom row and work up, going back and forth along the rows. **Free** takes the shortest way over the whole sheet.
+- **Pauses** (*Pause after every … plates* under *G-code: text*, 0 = off): after that many plates the tool lifts to the pause height (default 20 mm), the spindle stops for the pause length, and then it starts again with the spin-up wait. This lets the bit and the spindle cool, for example against plastic melting onto the bit. Turn on *Wait for Start after a pause* to add an M0, so the machine waits for you to press Start, for example to clean the bit. A pause never splits a plate, comes at the end of a row with row by row, and never comes after the last plate.
 - **Staple holes** as wide as the tool are drilled with pecks. Slots as wide as the tool are cut along their length. Wider holes are milled out from the middle to the edge, with a helix into round holes and a ramp into slots. The *Tool diameter* setting decides which method is used. A warning appears if the tool is wider than a hole.
 - The tool never goes down faster than the plunge rate, also on ramps and helixes. All moves between cuts are at the safe height.
 

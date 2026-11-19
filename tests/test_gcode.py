@@ -259,3 +259,40 @@ def test_spindle_wait_in_the_controllers_units(style, line):
     for program in gcode_files(make_job(gcode_spinup=2.5, gcode_dwell=style)).values():
         lines = program.splitlines()
         assert lines[lines.index(next(l for l in lines if l.startswith("M3 "))) + 1] == line
+
+
+def pauses(order, **overrides):
+    """The text file with a pause every 5 plates, and the lines of each pause from lifting to the restart."""
+    job = make_job(gcode_text_order=order, gcode_grid_enabled=False, gcode_pause_every=5, **overrides)
+    program = gcode_files(job)["t_2_text_T2.ngc"]
+    check_file(program, job.settings, "text")
+    lines = program.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.startswith("(Pause:")]
+    return job, program, [lines[i - 1:lines.index("M3 S18000", i) + 2] for i in starts]
+
+
+def test_pause_every_few_plates():
+    job, program, found = pauses("plate by plate", gcode_pause_seconds=45, gcode_dwell="G4 P milliseconds")
+    plates = sum(1 for p in job.sheets[0].plates if p.code)
+    assert len(found) == (plates - 1) // 5  # never after the last plate
+    assert all(p == ["G0 Z20", "(Pause: 5 plates since the last pause)", "M5", "G4 P45000", "M3 S18000",
+                     "G4 P3000"] for p in found)
+    assert "M0" not in program.splitlines()
+
+
+def test_pause_at_row_ends_and_with_m0():
+    job, program, found = pauses("row by row", gcode_pause_stop=True, gcode_pause_z=2)
+    rows = {p.row for p in job.sheets[0].plates if p.code}
+    assert len(found) == len(rows) - 1  # each row has more than 5 plates: a pause after every row but the last
+    # a pause height below the safe height lifts to the safe height
+    assert all(p[0] == f"G0 Z{gs._num(job.settings.gcode_safe_z)}" and "M0" in p for p in found)
+
+
+def test_pause_in_free_order():
+    job, program, found = pauses("free")
+    plates = sum(1 for p in job.sheets[0].plates if p.code)
+    assert len(found) == (plates - 1) // 5
+
+
+def test_no_pauses_by_default():
+    assert "(Pause:" not in gcode_files(make_job())["t_2_text+grid_T2.ngc"]
