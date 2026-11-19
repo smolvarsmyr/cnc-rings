@@ -203,6 +203,16 @@ FIELDS = (
           "Plate by plate finishes one plate (ring) before the next; row by row one row of plates. Both start at the "
           "bottom row and work up, going back and forth along the rows. Free takes the shortest way over the "
           "whole sheet.", ("plate by plate", "row by row", "free")),
+    Field("gcode_pause_every", 0, "int", "G-code: text", "Pause after every … plates",
+          "0 = no pauses. Lifts the tool, stops the spindle and waits, so the bit and the spindle can cool and you "
+          "can clean the bit. With row by row the pause comes at the end of a row, with free order after the "
+          "codes of that many plates.", minimum=0),
+    Field("gcode_pause_seconds", 30.0, "number", "G-code: text", "Pause length (s)",
+          "How long the spindle stays off. It then starts again, with the spin-up wait.", minimum=0),
+    Field("gcode_pause_z", 20.0, "mm", "G-code: text", "Lift to during a pause",
+          "Height above the material; at least the safe height.", minimum=0),
+    Field("gcode_pause_stop", False, "bool", "G-code: text", "Wait for Start after a pause",
+          "Adds M0 after the wait: the machine stops until you press Start, e.g. to clean the bit."),
     *_gcode_fields("grid", "G-code: grid lines", 2, "60° V-bit, 0.7 mm tip", 18000, feed=1000.0, plunge=300.0,
                    depth=0.7, step=0.0),
 )
@@ -973,7 +983,9 @@ class _Program:
         self.x, self.y, self.z = x, y, (self.z if z is None else z)
 
     def lift(self) -> None:
-        self.rapid(z=self.safe_z)
+        """Up to the safe height, unless already higher (after a pause)."""
+        if self.z is None or self.z < self.safe_z - EPS:
+            self.rapid(z=self.safe_z)
 
     def travel(self, x: float, y: float) -> None:
         """Lift to the safe height, move above (x, y) and drop to where plunging starts."""
@@ -993,6 +1005,20 @@ class _Program:
         else:
             self.lines.append("M5")
         self.rpm = rpm
+
+    def pause(self, note: str) -> None:
+        """Lift, stop the spindle and wait (then M0 if set), and start the spindle again where it was."""
+        rpm = self.rpm
+        self.lift()
+        self.rapid(z=max(self.s.gcode_pause_z, self.safe_z))
+        self.comment(f"Pause: {note}")
+        self.spindle(0)
+        if self.s.gcode_pause_seconds > 0:
+            self.lines.append(dwell(self.s.gcode_dwell, self.s.gcode_pause_seconds))
+            self.minutes += self.s.gcode_pause_seconds / 60
+        if self.s.gcode_pause_stop:
+            self.lines.append("M0")
+        self.spindle(rpm)
 
 
 def _nearest_first(shapes: list[Shape], g: _Program):
@@ -1055,10 +1081,13 @@ def plate_edges(grid: Grid, plates: set[tuple[int, int]]) -> list[Shape]:
 
 def _text_in_order(job: Job, shapes: list[Shape], g: _Program):
     """The engraved codes in the order set by gcode_text_order. Each shape is one copy of a code; the plate it
-    belongs to is the one its middle is in."""
+    belongs to is the one its middle is in. None between them marks where a pause may go: after each plate,
+    after each row with row by row, and anywhere in free order."""
     order = job.settings.gcode_text_order
     if order == "free":
-        yield from _nearest_first(shapes, g)
+        for shape in _nearest_first(shapes, g):
+            yield shape
+            yield None
         return
     rows: dict[int, dict[int, list[Shape]]] = {}
     for shape in shapes:
@@ -1067,9 +1096,27 @@ def _text_in_order(job: Job, shapes: list[Shape], g: _Program):
     for i, row in enumerate(sorted(rows)):  # bottom row first
         if order == "row by row":
             yield from _nearest_first([shape for plate in rows[row].values() for shape in plate], g)
+            yield None
         else:  # plate by plate, along the row and back along the next one
             for col in sorted(rows[row], reverse=i % 2 == 1):
                 yield from _nearest_first(rows[row][col], g)
+                yield None
+
+
+def _text_with_pauses(job: Job, shapes: list[Shape], g: _Program):
+    """The codes in order, pausing (g.pause) every gcode_pause_every plates. The work is counted in copies, so
+    a pause never comes in the middle of a plate (or a row), and never after the last one."""
+    every = job.settings.gcode_pause_every * job.settings.copies
+    done, due = 0, False
+    for shape in _text_in_order(job, shapes, g):
+        if shape is None:
+            due = every > 0 and done >= every
+            continue
+        if due:
+            g.pause(f"{done // job.settings.copies} plates since the last pause")
+            done, due = 0, False
+        done += 1
+        yield shape
 
 
 def _strokes_nearest_first(shape: Polylines, g: _Program):
@@ -1212,7 +1259,7 @@ def _gcode_program(job: Job, sheet: Sheet, title: str, tool: int, ops: list[tupl
                 _mill_hole(g, shape, depths, o, s.gcode_direction == "climb")
         else:
             shapes = sheet.layers[layer]
-            for shape in _text_in_order(job, shapes, g) if layer == "TEXT" else _nearest_first(shapes, g):
+            for shape in _text_with_pauses(job, shapes, g) if layer == "TEXT" else _nearest_first(shapes, g):
                 for stroke in _strokes_nearest_first(shape, g):
                     _engrave(g, stroke, depths, o)
     g.lift()
